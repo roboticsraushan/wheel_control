@@ -1,0 +1,47 @@
+rgb_segmentation_node:
+  ros__parameters:
+    # Camera settings
+    camera_device: 0              # 0 = /dev/video0, 1 = /dev/video1, etc.
+    camera_width: 1920            # 1080p width
+    camera_height: 1080           # 1080p height
+    camera_fps: 30                # Frames per second
+    
+    # Processing settings
+    processing_scale: 0.5         # Scale down for speed (0.5 = 50% = 960x540)
+    
+    # Segmentation settings
+    segmentation_method: 'color_based'  # Options: color_based, edge_based, combined
+    min_area: 10000               # Minimum navigable area in pixels (scaled)
+    
+    # Navigation settings
+    target_distance: 1.0          # Target distance (not used without depth)
+    
+    # Control gains
+    linear_gain: 0.5              # Forward speed multiplier
+    angular_gain: 1.0             # Turning speed multiplier
+    
+    # Velocity limits
+    max_linear_vel: 0.5           # Maximum forward speed (m/s)
+    max_angular_vel: 1.0          # Maximum turning speed (rad/s)
+
+# Common presets for different scenarios
+
+# Preset 1: Fast processing (lower quality)
+# processing_scale: 0.3
+# camera_width: 1280
+# camera_height: 720
+
+# Preset 2: High quality (slower)
+# processing_scale: 0.8
+# camera_width: 1920
+# camera_height: 1080
+
+# Preset 3: Cautious navigation
+# linear_gain: 0.3
+# angular_gain: 0.8
+# max_linear_vel: 0.3
+
+# Preset 4: Aggressive navigation
+# linear_gain: 0.8
+# angular_gain: 1.5
+# max_linear_vel: 0.8

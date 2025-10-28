@@ -1,0 +1,18 @@
+segmentation_node:
+  ros__parameters:
+    # Segmentation method: color_based, deeplab, etc.
+    segmentation_method: 'color_based'
+    
+    # Minimum navigable area in pixels
+    min_area: 5000
+    
+    # Target distance to maintain (meters)
+    target_distance: 1.0
+    
+    # Control gains
+    linear_gain: 0.5
+    angular_gain: 1.0
+    
+    # Velocity limits
+    max_linear_vel: 0.5   # m/s
+    max_angular_vel: 1.0  # rad/s
