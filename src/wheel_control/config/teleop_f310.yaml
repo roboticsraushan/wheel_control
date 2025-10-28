@@ -1,0 +1,18 @@
+teleop_twist_joy:
+  ros__parameters:
+    enable_button: 4            # LB to enable
+    enable_turbo_button: 5      # RB for turbo
+
+    axis_linear:
+      x: 1                      # Left stick vertical
+    scale_linear:
+      x: 0.5                    # Normal speed
+    scale_linear_turbo:
+      x: 1.0                    # Turbo speed
+
+    axis_angular:
+      yaw: 0                    # Left stick horizontal
+    scale_angular:
+      yaw: 1.0
+    scale_angular_turbo:
+      yaw: 2.0

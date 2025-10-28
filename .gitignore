@@ -1,0 +1,46 @@
+# ROS2
+install/
+build/
+log/
+*.pyc
+__pycache__/
+*.egg-info/
+
+# PlatformIO
+arduino/wheel_control_mega/.pio/
+arduino/wheel_control_mega/.vscode/
+arduino/wheel_control_mega/.clang_complete
+arduino/wheel_control_mega/.gcc-flags.json
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Build artifacts
+*.o
+*.a
+*.bin
+*.elf
+*.hex
+
+# Logs
+*.log
+
+# ROS specific
+devel/
+devel_isolated/
+CATKIN_IGNORE
