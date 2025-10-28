@@ -151,15 +151,17 @@ class SegmentationViewer(Node):
             # Stack horizontally
             display = np.hstack(resized_images)
             
-            # Add labels
-            cv2.putText(display, 'TRAJECTORY', (10, 30), 
+            # Add labels 
+            # Add labels at bottom
+            label_y = display.shape[0] - 10
+            cv2.putText(display, 'TRAJECTORY', (10, label_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             if len(resized_images) > 1:
-                cv2.putText(display, 'SEGMENTATION', (resized_images[0].shape[1] + 10, 30), 
+                cv2.putText(display, 'SEGMENTATION', (resized_images[0].shape[1] + 10, label_y), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
             if len(resized_images) > 2:
                 offset = resized_images[0].shape[1] + resized_images[1].shape[1]
-                cv2.putText(display, 'GOAL DETECTION', (offset + 10, 30), 
+                cv2.putText(display, 'GOAL DETECTION', (offset + 10, label_y), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         else:
             display = images_to_show[0]

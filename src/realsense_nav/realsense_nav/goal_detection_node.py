@@ -132,12 +132,6 @@ class GoalDetectionNode(Node):
                 goal_msg.point.z = -y  # Up/down (negated for ROS convention)
                 
                 self.goal_pub.publish(goal_msg)
-                
-                self.get_logger().info(
-                    f'Goal detected at: x={goal_msg.point.x:.2f}m, '
-                    f'y={goal_msg.point.y:.2f}m, z={goal_msg.point.z:.2f}m',
-                    throttle_duration_sec=1.0
-                )
         
         except Exception as e:
             self.get_logger().error(f'Error in color callback: {e}')

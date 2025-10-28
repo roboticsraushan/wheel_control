@@ -28,8 +28,8 @@ const uint8_t DIR2_PIN = 9;   // Motor 2 direction
 const uint8_t PWM2_PIN = 10;  // Motor 2 PWM (must be PWM-capable)
 
 // Invert direction per motor if wiring results in opposite motion
-const bool INVERT_M1 = false;
-const bool INVERT_M2 = false;
+const bool INVERT_M1 = false;   // Left motor inverted
+const bool INVERT_M2 = true;
 
 // Serial settings
 const unsigned long SERIAL_BAUD = 115200;

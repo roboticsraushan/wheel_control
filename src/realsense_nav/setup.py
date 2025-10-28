@@ -34,6 +34,7 @@ setup(
             'rgb_color_tuner = realsense_nav.rgb_color_tuner:main',
             'goal_detection_node = realsense_nav.goal_detection_node:main',
             'pure_pursuit_controller = realsense_nav.pure_pursuit_controller:main',
+            'nav_monitor = realsense_nav.nav_monitor:main',
         ],
     },
 )

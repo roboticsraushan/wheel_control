@@ -47,7 +47,7 @@ def generate_launch_description():
             'segmentation_method': 'color_based',
             'min_area': 5000,
         }],
-        output='screen'
+        output='log'  # Suppress output
     )
     
     # Goal detection node (yellow cone detection)
@@ -56,16 +56,16 @@ def generate_launch_description():
         executable='goal_detection_node',
         name='goal_detection_node',
         parameters=[{
-            'yellow_h_min': 20,
-            'yellow_h_max': 35,
-            'yellow_s_min': 100,
-            'yellow_s_max': 255,
-            'yellow_v_min': 100,
+            'yellow_h_min': 3,
+            'yellow_h_max': 19,
+            'yellow_s_min': 49,
+            'yellow_s_max': 159,
+            'yellow_v_min': 106,
             'yellow_v_max': 255,
-            'min_cone_area': 500,
-            'max_cone_area': 50000,
+            'min_cone_area': 1400,
+            'max_cone_area': 20900,
         }],
-        output='screen'
+        output='log'  # Suppress output
     )
     
     # Pure pursuit controller (combines path following and goal seeking)
@@ -81,7 +81,7 @@ def generate_launch_description():
             'path_follow_weight': 0.3,
             'goal_seek_weight': 0.7,
         }],
-        output='screen'
+        output='log'  # Suppress output
     )
     
     # Serial motor bridge (converts /cmd_vel to Arduino commands)
@@ -90,12 +90,24 @@ def generate_launch_description():
         executable='serial_motor_bridge',
         name='serial_motor_bridge',
         parameters=[{
-            'port': '/dev/ttyACM0',
+            'port': '/dev/ttyACM1',
             'baud': 115200,
             'wheel_separation': 0.40,
             'max_speed_mps': 1.0,
         }],
-        output='screen'
+        output='screen'  # Show Arduino commands
+    )
+    
+    # Navigation monitor (prints distance and PWM values)
+    nav_monitor_node = Node(
+        package='realsense_nav',
+        executable='nav_monitor',
+        name='nav_monitor',
+        parameters=[{
+            'wheel_separation': 0.40,
+            'max_speed_mps': 1.0,
+        }],
+        output='screen'  # Only this node prints to screen
     )
     
     # Joy node (reads gamepad input)
@@ -107,7 +119,8 @@ def generate_launch_description():
             'device_id': 0,
             'deadzone': 0.05,
             'autorepeat_rate': 20.0,
-        }]
+        }],
+        output='log'  # Suppress output
     )
     
     # Teleop twist joy (converts gamepad to /cmd_vel)
@@ -122,7 +135,8 @@ def generate_launch_description():
             'scale_angular.yaw': 1.0,
             'enable_button': 4,  # LB button
             'enable_turbo_button': 5,  # RB button
-        }]
+        }],
+        output='log'  # Suppress output
     )
     
     return LaunchDescription([
@@ -131,6 +145,7 @@ def generate_launch_description():
         goal_detection_node,
         pure_pursuit_node,
         serial_bridge_node,
+        nav_monitor_node,
         joy_node,
         teleop_node,
     ])

@@ -31,6 +31,13 @@ class PurePursuitController(Node):
         self.path_centroid = None  # From segmentation
         self.navigable = False
         
+        # Smoothing and timeout
+        self.prev_linear_vel = 0.0
+        self.prev_angular_vel = 0.0
+        self.alpha_smooth = 0.3  # Smoothing factor (0=no change, 1=instant)
+        self.last_goal_time = self.get_clock().now()
+        self.goal_timeout = 0.5  # seconds
+        
         # Subscribers
         self.goal_sub = self.create_subscription(
             PointStamped,
@@ -74,15 +81,18 @@ class PurePursuitController(Node):
         )
         
         # Control timer
-        self.create_timer(0.05, self.control_loop)  # 20 Hz
+        self.create_timer(0.02, self.control_loop)  # 50 Hz for smoother control
         
         self.get_logger().info('Pure Pursuit Controller started')
     
     def goal_callback(self, msg):
         self.goal_position = msg.point
+        self.last_goal_time = self.get_clock().now()  # Update timestamp
     
     def goal_detected_callback(self, msg):
         self.goal_detected = msg.data
+        if msg.data:
+            self.last_goal_time = self.get_clock().now()  # Update timestamp
     
     def centroid_callback(self, msg):
         if len(msg.data) >= 2:
@@ -103,10 +113,19 @@ class PurePursuitController(Node):
         path_weight = self.get_parameter('path_follow_weight').value
         goal_weight = self.get_parameter('goal_seek_weight').value
         
+        # Check if goal data is stale
+        current_time = self.get_clock().now()
+        time_since_goal = (current_time - self.last_goal_time).nanoseconds / 1e9
+        goal_is_fresh = time_since_goal < self.goal_timeout
+        
         # Trajectory data for visualization [goal_x, goal_y, path_angle, goal_angle, combined_angle]
         trajectory_data = Float32MultiArray()
         
-        if self.goal_detected and self.goal_position is not None:
+        # Desired velocities (will be smoothed later)
+        desired_linear = 0.0
+        desired_angular = 0.0
+        
+        if self.goal_detected and self.goal_position is not None and goal_is_fresh:
             # Goal-seeking mode with pure pursuit
             goal_x = self.goal_position.x
             goal_y = self.goal_position.y
@@ -166,33 +185,38 @@ class PurePursuitController(Node):
                         0.0, float(goal_angular), float(combined_angular)
                     ]
                 
-                # Set velocities
-                cmd.linear.x = max_linear * (1.0 - abs(alpha) / math.pi)  # Slow down for sharp turns
-                cmd.angular.z = max(-max_angular, min(max_angular, combined_angular))
-                
-                self.get_logger().info(
-                    f'Pure Pursuit: dist={distance:.2f}m, angle={math.degrees(alpha):.1f}°, '
-                    f'lin={cmd.linear.x:.2f}, ang={cmd.angular.z:.2f}',
-                    throttle_duration_sec=0.5
-                )
+                # Set desired velocities
+                desired_linear = max_linear * (1.0 - abs(alpha) / math.pi)  # Slow down for sharp turns
+                desired_angular = max(-max_angular, min(max_angular, combined_angular))
         
         elif self.navigable and self.path_centroid is not None:
-            # Path following mode only (no goal detected)
+            # Path following mode only (no goal detected or stale goal)
             cx = self.path_centroid[0]
             image_center = 320.0
             error = (cx - image_center) / image_center
             
-            cmd.linear.x = max_linear * (1.0 - abs(error))
-            cmd.angular.z = -1.0 * error
-            cmd.angular.z = max(-max_angular, min(max_angular, cmd.angular.z))
+            desired_linear = max_linear * (1.0 - abs(error))
+            desired_angular = -1.0 * error
+            desired_angular = max(-max_angular, min(max_angular, desired_angular))
             
-            trajectory_data.data = [0.0, 0.0, float(cmd.angular.z), 0.0, float(cmd.angular.z)]
+            trajectory_data.data = [0.0, 0.0, float(desired_angular), 0.0, float(desired_angular)]
         
         else:
-            # No goal and no path, stop
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
+            # No goal and no path, gradually stop
+            desired_linear = 0.0
+            desired_angular = 0.0
             trajectory_data.data = [0.0, 0.0, 0.0, 0.0, 0.0]
+        
+        # Apply exponential smoothing for smooth motion
+        # new_vel = alpha * desired + (1 - alpha) * prev
+        cmd.linear.x = (self.alpha_smooth * desired_linear + 
+                       (1.0 - self.alpha_smooth) * self.prev_linear_vel)
+        cmd.angular.z = (self.alpha_smooth * desired_angular + 
+                        (1.0 - self.alpha_smooth) * self.prev_angular_vel)
+        
+        # Update previous velocities
+        self.prev_linear_vel = cmd.linear.x
+        self.prev_angular_vel = cmd.angular.z
         
         # Publish commands
         self.cmd_vel_pub.publish(cmd)
