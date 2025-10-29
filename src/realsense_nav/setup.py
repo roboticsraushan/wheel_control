@@ -35,6 +35,7 @@ setup(
             'goal_detection_node = realsense_nav.goal_detection_node:main',
             'pure_pursuit_controller = realsense_nav.pure_pursuit_controller:main',
             'nav_monitor = realsense_nav.nav_monitor:main',
+            'behavior_tree_controller = realsense_nav.behavior_tree_controller:main',
         ],
     },
 )

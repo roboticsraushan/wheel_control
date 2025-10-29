@@ -29,13 +29,13 @@ const uint8_t PWM2_PIN = 10;  // Motor 2 PWM (must be PWM-capable)
 
 // Invert direction per motor if wiring results in opposite motion
 const bool INVERT_M1 = false;   // Left motor inverted
-const bool INVERT_M2 = true;
+const bool INVERT_M2 = false;
 
 // Serial settings
 const unsigned long SERIAL_BAUD = 115200;
 
 // Watchdog timeout (ms). If no valid command within this time, stop motors.
-const unsigned long WATCHDOG_MS = 500;  // adjust as needed
+const unsigned long WATCHDOG_MS = 200;  // 200ms timeout for 50Hz control (faster than before)
 
 // Uncomment to enable periodic telemetry prints (every TELEMETRY_MS)
 //#define ENABLE_TELEMETRY 1
@@ -100,11 +100,9 @@ void handleLine(char* line) {
         if (r < -255) r = -255; if (r > 255) r = 255;
         setMotors((int16_t)l, (int16_t)r);
         last_cmd_ms = millis();
-        Serial.print(F("OK L:"));
-        Serial.print(l);
-        Serial.print(F(" R:"));
-        Serial.println(r);
+        // Removed Serial acknowledgment for speed - no response needed at 50Hz
       } else {
+        // Only report errors (rare)
         Serial.println(F("ERR bad M"));
       }
       break;

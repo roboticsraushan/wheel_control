@@ -72,7 +72,7 @@ class NavMonitor(Node):
     
     def print_status(self):
         """Print the monitoring data"""
-        print(f"Distance: {self.goal_distance:5.2f}m | Left PWM: {self.left_pwm:4d} | Right PWM: {self.right_pwm:4d}")
+        print(f"Distance: {self.goal_distance:5.2f}m | Left PWM: {self.left_pwm:4d} | Right PWM: {self.right_pwm:4d}", flush=True)
 
 
 def main(args=None):

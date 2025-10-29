@@ -5,7 +5,8 @@ Brings up:
 - RealSense D455 camera
 - Path segmentation (floor detection)
 - Goal detection (yellow cone)
-- Pure pursuit controller
+- Pure Pursuit controller (navigation)
+- Behavior Tree manager (state management)
 - Motor control (serial bridge)
 - Gamepad control (Logitech F310)
 """
@@ -41,7 +42,7 @@ def generate_launch_description():
     # Path segmentation node (floor detection)
     segmentation_node = Node(
         package='realsense_nav',
-        executable='segmentation_node',
+        executable='segmentation_node.py',
         name='segmentation_node',
         parameters=[{
             'segmentation_method': 'color_based',
@@ -53,7 +54,7 @@ def generate_launch_description():
     # Goal detection node (yellow cone detection)
     goal_detection_node = Node(
         package='realsense_nav',
-        executable='goal_detection_node',
+        executable='goal_detection_node.py',
         name='goal_detection_node',
         parameters=[{
             'yellow_h_min': 3,
@@ -68,10 +69,10 @@ def generate_launch_description():
         output='log'  # Suppress output
     )
     
-    # Pure pursuit controller (combines path following and goal seeking)
+    # Pure pursuit controller (navigation - always runs)
     pure_pursuit_node = Node(
         package='realsense_nav',
-        executable='pure_pursuit_controller',
+        executable='pure_pursuit_controller.py',
         name='pure_pursuit_controller',
         parameters=[{
             'lookahead_distance': 0.5,
@@ -84,13 +85,21 @@ def generate_launch_description():
         output='log'  # Suppress output
     )
     
+    # Behavior Tree manager (state management - always runs)
+    behavior_tree_node = Node(
+        package='realsense_nav',
+        executable='behavior_tree_cpp_node',
+        name='behavior_tree_manager',
+        output='screen'  # Show behavior tree status
+    )
+    
     # Serial motor bridge (converts /cmd_vel to Arduino commands)
     serial_bridge_node = Node(
         package='wheel_control',
         executable='serial_motor_bridge',
         name='serial_motor_bridge',
         parameters=[{
-            'port': '/dev/ttyACM1',
+            'port': '/dev/ttyACM0',
             'baud': 115200,
             'wheel_separation': 0.40,
             'max_speed_mps': 1.0,
@@ -101,7 +110,7 @@ def generate_launch_description():
     # Navigation monitor (prints distance and PWM values)
     nav_monitor_node = Node(
         package='realsense_nav',
-        executable='nav_monitor',
+        executable='nav_monitor.py',
         name='nav_monitor',
         parameters=[{
             'wheel_separation': 0.40,
@@ -144,6 +153,7 @@ def generate_launch_description():
         segmentation_node,
         goal_detection_node,
         pure_pursuit_node,
+        behavior_tree_node,
         serial_bridge_node,
         nav_monitor_node,
         joy_node,

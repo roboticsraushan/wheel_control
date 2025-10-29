@@ -21,7 +21,7 @@ class PurePursuitController(Node):
         self.declare_parameter('lookahead_distance', 0.5)  # meters
         self.declare_parameter('max_linear_vel', 0.5)     # m/s
         self.declare_parameter('max_angular_vel', 1.0)    # rad/s
-        self.declare_parameter('goal_threshold', 0.3)     # meters, stop distance
+        self.declare_parameter('goal_threshold', 0.8)     # meters, stop distance (80 cm)
         self.declare_parameter('path_follow_weight', 0.3) # Weight for path following
         self.declare_parameter('goal_seek_weight', 0.7)   # Weight for goal seeking
         

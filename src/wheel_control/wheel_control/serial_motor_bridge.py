@@ -84,14 +84,19 @@ class SerialMotorBridge(Node):
 
 
     def write_cmd(self, left: int, right: int):
-        l = max(-255, min(255, int(left)))
-        r = max(-255, min(255, int(right)))
+        # SWAP left and right to match correct motor association
+        r = max(-255, min(255, int(left)))
+        l = max(-255, min(255, int(right)))
         line = f"M {l} {r}\n".encode('ascii')
         with self.lock:
             try:
                 self.ser.write(line)
-                # Log the command sent to Arduino
-                print(f"Arduino CMD: M {l} {r}")
+                self.ser.flush()  # Force immediate send
+                # Throttled logging (every 1 second) to avoid slowing down
+                self.get_logger().info(
+                    f'Arduino CMD: M {l} {r}',
+                    throttle_duration_sec=1.0
+                )
             except Exception as e:
                 self.get_logger().error(f'serial write failed: {e}')
                 return
