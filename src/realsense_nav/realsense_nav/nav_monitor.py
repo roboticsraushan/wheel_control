@@ -7,6 +7,7 @@ Prints: Goal Distance | Left PWM | Right PWM
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PointStamped, Twist
+from std_msgs.msg import String
 import math
 
 
@@ -18,6 +19,7 @@ class NavMonitor(Node):
         self.goal_distance = 0.0
         self.left_pwm = 0
         self.right_pwm = 0
+        self.bt_state = "UNKNOWN"
         
         # Parameters for PWM calculation
         self.declare_parameter('wheel_separation', 0.40)
@@ -35,6 +37,13 @@ class NavMonitor(Node):
             Twist,
             '/cmd_vel',
             self.cmd_vel_callback,
+            10
+        )
+        
+        self.bt_state_sub = self.create_subscription(
+            String,
+            '/behavior_state',
+            self.bt_state_callback,
             10
         )
         
@@ -70,14 +79,17 @@ class NavMonitor(Node):
         self.left_pwm = to_pwm(v_l)
         self.right_pwm = to_pwm(v_r)
     
+    def bt_state_callback(self, msg):
+        self.bt_state = msg.data
+
     def print_status(self):
         """Print the monitoring data"""
-        print(f"Distance: {self.goal_distance:5.2f}m | Left PWM: {self.left_pwm:4d} | Right PWM: {self.right_pwm:4d}", flush=True)
+        print(f"Distance: {self.goal_distance:5.2f}m | Left PWM: {self.left_pwm:4d} | Right PWM: {self.right_pwm:4d} | BT State: {self.bt_state}", flush=True)
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = NavMonitor()
+    # node = NavMonitor()
     
     try:
         rclpy.spin(node)

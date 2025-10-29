@@ -78,18 +78,16 @@ int main(int argc, char** argv)
   std::string bt_xml_file = package_share_dir + "/behavior_trees/cone_navigation.xml";
   RCLCPP_INFO(node->get_logger(), "Loading behavior tree from: %s", bt_xml_file.c_str());
   
-  // Load and create behavior tree
+  // Create blackboard and set shared_data before creating the tree
+  auto blackboard = BT::Blackboard::create();
+  blackboard->set("shared_data", &shared_data);
   BT::Tree tree;
   try {
-    tree = factory.createTreeFromFile(bt_xml_file);
+    tree = factory.createTreeFromFile(bt_xml_file, blackboard);
   } catch (const std::exception& e) {
     RCLCPP_ERROR(node->get_logger(), "Failed to load behavior tree: %s", e.what());
     return 1;
   }
-  
-  // Set shared data in blackboard
-  tree.rootBlackboard()->set("shared_data", &shared_data);
-  
   // Create logger for visualization
   BT::StdCoutLogger logger_cout(tree);
   
@@ -101,31 +99,39 @@ int main(int argc, char** argv)
   // Tick the tree at 20Hz
   rclcpp::Rate rate(20);
   
+  std::string last_state = "IDLE";
   while (rclcpp::ok()) {
     rclcpp::spin_some(node);
-    
     BT::NodeStatus status = tree.tickRoot();
-    
+
+    // Determine state string
+    std::string state_str;
+    switch (status) {
+      case BT::NodeStatus::SUCCESS:
+        state_str = "SUCCESS";
+        break;
+      case BT::NodeStatus::FAILURE:
+        state_str = "FAILURE";
+        break;
+      case BT::NodeStatus::RUNNING:
+      default:
+        state_str = "RUNNING";
+        break;
+    }
+
+    // Publish state periodically (even if unchanged)
+    std_msgs::msg::String state_msg;
+    state_msg.data = state_str;
+    shared_data.state_pub->publish(state_msg);
+    last_state = state_str;
+
     if (status == BT::NodeStatus::SUCCESS) {
       RCLCPP_INFO(node->get_logger(), "Behavior tree completed successfully!");
-      
-      // Publish STOP state
-      std_msgs::msg::String state_msg;
-      state_msg.data = "STOP";
-      shared_data.state_pub->publish(state_msg);
-      
       break;
     } else if (status == BT::NodeStatus::FAILURE) {
       RCLCPP_ERROR(node->get_logger(), "Behavior tree failed!");
-      
-      // Publish STOP state
-      std_msgs::msg::String state_msg;
-      state_msg.data = "STOP";
-      shared_data.state_pub->publish(state_msg);
-      
       break;
     }
-    
     rate.sleep();
   }
   

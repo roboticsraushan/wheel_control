@@ -8,9 +8,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_with self.lock: protects serial write, but if the watchdog timer also tries to write at the same time, it could cause brief delays.
-
-directory
+from ament_index_python.packages import get_package_share_directory
 import os
 
 
@@ -72,7 +70,7 @@ def generate_launch_description():
             'lookahead_distance': 0.5,
             'max_linear_vel': 0.5,
             'max_angular_vel': 1.0,
-            'goal_threshold': 0.3,
+            'goal_threshold': 0.8,
             'path_follow_weight': 0.3,
             'goal_seek_weight': 0.7,
         }],

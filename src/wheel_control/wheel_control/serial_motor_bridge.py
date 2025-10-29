@@ -93,10 +93,10 @@ class SerialMotorBridge(Node):
                 self.ser.write(line)
                 self.ser.flush()  # Force immediate send
                 # Throttled logging (every 1 second) to avoid slowing down
-                self.get_logger().info(
-                    f'Arduino CMD: M {l} {r}',
-                    throttle_duration_sec=1.0
-                )
+                # self.get_logger().info(
+                #     f'Arduino CMD: M {l} {r}',
+                #     throttle_duration_sec=1.0
+                # )
             except Exception as e:
                 self.get_logger().error(f'serial write failed: {e}')
                 return
@@ -127,7 +127,7 @@ class SerialMotorBridge(Node):
         left_pwm = to_pwm(v_l)
         right_pwm = to_pwm(v_r)
         self.write_cmd(left_pwm, right_pwm)
-        print(f"Arduino CMD: M {left_pwm} {right_pwm}")
+        # print(f"Arduino CMD: M {left_pwm} {right_pwm}")
         # Store for external access
         self.last_left_pwm = left_pwm
         self.last_right_pwm = right_pwm

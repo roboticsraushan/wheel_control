@@ -78,7 +78,7 @@ def generate_launch_description():
             'lookahead_distance': 0.5,
             'max_linear_vel': 0.5,
             'max_angular_vel': 1.0,
-            'goal_threshold': 0.3,
+            'goal_threshold': 0.8,
             'path_follow_weight': 0.3,
             'goal_seek_weight': 0.7,
         }],

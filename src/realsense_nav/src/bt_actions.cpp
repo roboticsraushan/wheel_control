@@ -52,7 +52,7 @@ BT::NodeStatus GoToYellowCone::onRunning()
   
   // Check if goal reached (pure pursuit controller will set this)
   if (shared_data_->state_complete) {
-    RCLCPP_INFO(shared_data_->node->get_logger(), "BT: GoToYellowCone completed");
+    RCLCPP_INFO(shared_data_->node->get_logger(), "BT: GoToYellowCone completed");        
     return BT::NodeStatus::SUCCESS;
   }
   

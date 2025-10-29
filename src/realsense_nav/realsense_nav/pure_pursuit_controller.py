@@ -13,6 +13,7 @@ import numpy as np
 import math
 
 
+
 class PurePursuitController(Node):
     def __init__(self):
         super().__init__('pure_pursuit_controller')
@@ -24,7 +25,6 @@ class PurePursuitController(Node):
         self.declare_parameter('goal_threshold', 0.8)     # meters, stop distance (80 cm)
         self.declare_parameter('path_follow_weight', 0.3) # Weight for path following
         self.declare_parameter('goal_seek_weight', 0.7)   # Weight for goal seeking
-        
         # State variables
         self.goal_position = None
         self.goal_detected = False
@@ -80,9 +80,14 @@ class PurePursuitController(Node):
             10
         )
         
+        # Publisher for BT state completion
+        self.state_complete_pub = self.create_publisher(
+            Bool,
+            '/behavior_state_complete',
+            10
+        )
         # Control timer
         self.create_timer(0.02, self.control_loop)  # 50 Hz for smoother control
-        
         self.get_logger().info('Pure Pursuit Controller started')
     
     def goal_callback(self, msg):
@@ -104,7 +109,7 @@ class PurePursuitController(Node):
     def control_loop(self):
         """Main control loop using pure pursuit algorithm"""
         cmd = Twist()
-        
+        print('control_loop tick')
         # Get parameters
         lookahead = self.get_parameter('lookahead_distance').value
         max_linear = self.get_parameter('max_linear_vel').value
@@ -112,6 +117,7 @@ class PurePursuitController(Node):
         goal_thresh = self.get_parameter('goal_threshold').value
         path_weight = self.get_parameter('path_follow_weight').value
         goal_weight = self.get_parameter('goal_seek_weight').value
+
         
         # Check if goal data is stale
         current_time = self.get_clock().now()
@@ -124,7 +130,7 @@ class PurePursuitController(Node):
         # Desired velocities (will be smoothed later)
         desired_linear = 0.0
         desired_angular = 0.0
-        
+        self.get_logger().debug(f'Goal detected: {self.goal_detected}, Fresh: {goal_is_fresh}, Navigable: {self.navigable}')
         if self.goal_detected and self.goal_position is not None and goal_is_fresh:
             # Goal-seeking mode with pure pursuit
             goal_x = self.goal_position.x
@@ -132,12 +138,16 @@ class PurePursuitController(Node):
             
             # Calculate distance to goal
             distance = math.sqrt(goal_x**2 + goal_y**2)
-            
+            self.get_logger().info(f"distance: {distance}, goal_thresh: {goal_thresh}")
+
             if distance < goal_thresh:
                 # Reached goal, stop
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
-                self.get_logger().info('Goal reached!', throttle_duration_sec=2.0)
+                self.get_logger().info(f"distance: {distance}, goal_thresh: {goal_thresh}")
+
+                # Publish state complete to BT
+                self.state_complete_pub.publish(Bool(data=True))
             else:
                 # Pure pursuit algorithm
                 # Calculate lookahead point on path to goal
@@ -163,7 +173,7 @@ class PurePursuitController(Node):
                 if self.navigable and self.path_centroid is not None:
                     # Path following component (proportional control)
                     # Assuming image width ~640 or scaled centroid
-                    cx = self.path_centroid[0]
+                    self.get_logger().info('control_loop tick')
                     # Normalize error (assume center is at ~320 for typical image)
                     image_center = 320.0
                     error = (cx - image_center) / image_center

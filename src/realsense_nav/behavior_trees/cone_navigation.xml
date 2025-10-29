@@ -6,7 +6,7 @@
     -->
     <BehaviorTree ID="ConeNavigationTree">
         <Sequence name="ConeNavigationSequence">
-            <GoToYellowCone name="GoToCone1" stop_distance="1.0" timeout="30.0"/>
+            <GoToYellowCone name="GoToCone1" stop_distance="0.8" timeout="30.0"/>
             <Wait name="Wait1" duration="2.0"/>
             <TurnDegrees name="TurnRight90" degrees="-90.0" angular_speed="0.5"/>
             <Wait name="Wait2" duration="1.0"/>
