@@ -8,7 +8,7 @@ Uses pure pursuit algorithm for smooth trajectory generation
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist, PointStamped
-from std_msgs.msg import Bool, Float32MultiArray
+from std_msgs.msg import Bool, Float32MultiArray, String
 import numpy as np
 import math
 
@@ -86,6 +86,18 @@ class PurePursuitController(Node):
             '/behavior_state_complete',
             10
         )
+        # Subscribe to behavior_state commands from BT (e.g. TURN_LEFT, TURN_RIGHT, STOP)
+        self.behavior_state_sub = self.create_subscription(
+            String,
+            '/behavior_state',
+            self.behavior_state_callback,
+            10
+        )
+
+        # turning state
+        self.turning = False
+        self.turn_end_time = 0.0  # seconds since epoch
+        self.turn_angular_vel = 0.0
         # Control timer
         self.create_timer(0.02, self.control_loop)  # 50 Hz for smoother control
         self.get_logger().info('Pure Pursuit Controller started')
@@ -105,11 +117,75 @@ class PurePursuitController(Node):
     
     def navigable_callback(self, msg):
         self.navigable = msg.data
+
+    def behavior_state_callback(self, msg):
+        # Parse BT commands like TURN_RIGHT:90.0 or TURN_LEFT:90.0 or STOP
+        text = msg.data.strip()
+        if text.startswith('TURN_RIGHT:'):
+            try:
+                parts = text.split(':')
+                degrees = float(parts[1])
+                # optional third field: angular speed in rad/s
+                if len(parts) > 2 and parts[2].strip() != '':
+                    ang_speed = float(parts[2])
+                else:
+                    ang_speed = self.get_parameter('max_angular_vel').value
+            except Exception:
+                self.get_logger().error(f'Invalid TURN_RIGHT message: {text}')
+                return
+            # compute duration from degrees and angular speed (ang_speed in rad/s)
+            duration = abs(degrees) * math.pi / 180.0 / ang_speed
+            now = self.get_clock().now()
+            self.turn_end_time = now.nanoseconds / 1e9 + duration
+            self.turning = True
+            self.turn_angular_vel = -abs(ang_speed)
+            self.get_logger().info(f'Starting TURN_RIGHT {degrees}deg at {ang_speed:.2f}rad/s for {duration:.2f}s')
+        elif text.startswith('TURN_LEFT:'):
+            try:
+                parts = text.split(':')
+                degrees = float(parts[1])
+                # optional third field: angular speed in rad/s
+                if len(parts) > 2 and parts[2].strip() != '':
+                    ang_speed = float(parts[2])
+                else:
+                    ang_speed = self.get_parameter('max_angular_vel').value
+            except Exception:
+                self.get_logger().error(f'Invalid TURN_LEFT message: {text}')
+                return
+            duration = abs(degrees) * math.pi / 180.0 / ang_speed
+            now = self.get_clock().now()
+            self.turn_end_time = now.nanoseconds / 1e9 + duration
+            self.turning = True
+            self.turn_angular_vel = abs(ang_speed)
+            self.get_logger().info(f'Starting TURN_LEFT {degrees}deg at {ang_speed:.2f}rad/s for {duration:.2f}s')
+        elif text.startswith('STOP'):
+            self.turning = False
+            self.turn_end_time = 0.0
+            self.turn_angular_vel = 0.0
+            self.get_logger().info('Received STOP from BT')
     
     def control_loop(self):
         """Main control loop using pure pursuit algorithm"""
         cmd = Twist()
-        print('control_loop tick')
+        # quick heartbeat for debugging
+        # (avoid spamming logs; use info once per second if needed)
+        # print('control_loop tick')
+        # If currently executing a turn commanded by the BT, publish angular vel
+        if self.turning:
+            now = self.get_clock().now().nanoseconds / 1e9
+            if now < self.turn_end_time:
+                cmd.linear.x = 0.0
+                cmd.angular.z = self.turn_angular_vel
+                self.cmd_vel_pub.publish(cmd)
+                return
+            else:
+                # turn finished
+                self.get_logger().info('Turn completed')
+                self.turning = False
+                self.turn_end_time = 0.0
+                self.turn_angular_vel = 0.0
+                # notify BT
+                self.state_complete_pub.publish(Bool(data=True))
         # Get parameters
         lookahead = self.get_parameter('lookahead_distance').value
         max_linear = self.get_parameter('max_linear_vel').value
@@ -138,13 +214,13 @@ class PurePursuitController(Node):
             
             # Calculate distance to goal
             distance = math.sqrt(goal_x**2 + goal_y**2)
-            self.get_logger().info(f"distance: {distance}, goal_thresh: {goal_thresh}")
+            # self.get_logger().info(f"distance: {distance}, goal_thresh: {goal_thresh}")
 
             if distance < goal_thresh:
                 # Reached goal, stop
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
-                self.get_logger().info(f"distance: {distance}, goal_thresh: {goal_thresh}")
+                # self.get_logger().info(f"distance: {distance}, goal_thresh: {goal_thresh}")
 
                 # Publish state complete to BT
                 self.state_complete_pub.publish(Bool(data=True))
