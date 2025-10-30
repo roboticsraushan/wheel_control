@@ -40,16 +40,16 @@ def generate_launch_description():
     )
     
     # Path segmentation node (floor detection)
-    segmentation_node = Node(
-        package='realsense_nav',
-        executable='segmentation_node.py',
-        name='segmentation_node',
-        parameters=[{
-            'segmentation_method': 'color_based',
-            'min_area': 5000,
-        }],
-        output='log'  # Suppress output
-    )
+    # segmentation_node = Node(
+    #     package='realsense_nav',
+    #     executable='segmentation_node.py',
+    #     name='segmentation_node',
+    #     parameters=[{
+    #         'segmentation_method': 'color_based',
+    #         'min_area': 5000,
+    #     }],
+    #     output='log'  # Suppress output
+    # )
     
     # Goal detection node (yellow cone detection)
     goal_detection_node = Node(
@@ -150,7 +150,7 @@ def generate_launch_description():
     
     return LaunchDescription([
         realsense_launch,
-        segmentation_node,
+        # segmentation_node,
         goal_detection_node,
         pure_pursuit_node,
         behavior_tree_node,
