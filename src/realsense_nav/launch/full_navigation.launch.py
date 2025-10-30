@@ -108,16 +108,16 @@ def generate_launch_description():
     )
     
     # Navigation monitor (prints distance and PWM values)
-    nav_monitor_node = Node(
-        package='realsense_nav',
-        executable='nav_monitor.py',
-        name='nav_monitor',
-        parameters=[{
-            'wheel_separation': 0.40,
-            'max_speed_mps': 1.0,
-        }],
-        output='screen'  # Only this node prints to screen
-    )
+    # nav_monitor_node = Node(
+    #     package='realsense_nav',
+    #     executable='nav_monitor.py',
+    #     name='nav_monitor',
+    #     parameters=[{
+    #         'wheel_separation': 0.40,
+    #         'max_speed_mps': 1.0,
+    #     }],
+    #     output='screen'  # Only this node prints to screen
+    # )
     
     # Joy node (reads gamepad input)
     joy_node = Node(
@@ -147,6 +147,47 @@ def generate_launch_description():
         }],
         output='log'  # Suppress output
     )
+
+    # Vision-only pipeline nodes (scene graph, safety, NL interpreter, topo planner)
+    scene_graph_node = Node(
+        package='realsense_nav',
+        executable='scene_graph_node.py',
+        name='scene_graph_node',
+        parameters=[{
+            'use_yolo': True,
+            'yolo_model': 'yolov8n.pt',
+            'yolo_conf': 0.25,
+        }],
+        output='log'
+    )
+
+    vision_safety_node = Node(
+        package='realsense_nav',
+        executable='vision_safety_node.py',
+        name='vision_safety_node',
+        output='log'
+    )
+
+    nl_interpreter_node = Node(
+        package='realsense_nav',
+        executable='nl_interpreter.py',
+        name='nl_interpreter',
+        output='log'
+    )
+
+    topo_planner_node = Node(
+        package='realsense_nav',
+        executable='topo_planner.py',
+        name='topo_planner',
+        output='log'
+    )
+
+    scene_graph_viz_node = Node(
+        package='realsense_nav',
+        executable='scene_graph_viz.py',
+        name='scene_graph_viz',
+        output='log'
+    )
     
     return LaunchDescription([
         realsense_launch,
@@ -155,7 +196,12 @@ def generate_launch_description():
         pure_pursuit_node,
         behavior_tree_node,
         serial_bridge_node,
-        nav_monitor_node,
+        # nav_monitor_node,
         joy_node,
         teleop_node,
+        # vision pipeline
+        scene_graph_node,
+        vision_safety_node,
+        nl_interpreter_node,
+        topo_planner_node,
     ])

@@ -58,6 +58,11 @@ install(PROGRAMS
   realsense_nav/pure_pursuit_controller.py
   realsense_nav/nav_monitor.py
   realsense_nav/behavior_tree_controller.py
+  realsense_nav/scene_graph_node.py
+  realsense_nav/vision_safety_node.py
+  realsense_nav/nl_interpreter.py
+  realsense_nav/topo_planner.py
+  realsense_nav/scene_graph_viz.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
