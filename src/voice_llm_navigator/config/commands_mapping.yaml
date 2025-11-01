@@ -1,0 +1,12 @@
+# Mapping of common voice phrases to normalized commands
+# Useful for quick keyword-based mapping in MVP
+commands:
+  go_to:
+    - go to
+    - go
+    - navigate to
+    - move to
+  stop:
+    - stop
+    - abort
+    - cancel

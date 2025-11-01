@@ -1,0 +1,5 @@
+# LLM config for later integration (Ollama/GPT4All)
+model: ollama:llama-3.1-8b
+system_prompt: |
+  You are a navigation assistant. Parse user utterances into a small JSON with 'intent' and 'target' fields.
+  Only return valid labels present in the provided detected_objects list.

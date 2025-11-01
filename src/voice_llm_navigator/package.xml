@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>voice_llm_navigator</name>
+  <version>0.1.0</version>
+  <build_type>ament_python</build_type>
+  <description>Voice-to-LLM navigator (MVP) for ROS 2 — local speech recognition + LLM command parsing.</description>
+  <maintainer email="you@example.com">You</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+
+  <test_depend>pytest</test_depend>
+</package>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Voice UI — chat mode</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <main class="chat-shell">
+      <div class="messages" id="messages">
+        <!-- messages will be appended here. newest at bottom -->
+      </div>
+
+      <div class="orb-area">
+        <div id="orb" class="orb idle">
+          <div class="orb-inner" id="orbInner"></div>
+          <div class="spinner" id="spinner" aria-hidden="true"></div>
+        </div>
+
+        <div class="bars" id="bars" aria-hidden="true"></div>
+
+        <div class="orb-caption" id="orbCaption">Tap to speak</div>
+      </div>
+
+      <div class="controls-row">
+        <button id="recordBtn" class="primary">Tap to speak</button>
+        <button id="sendTextBtn">Send Text</button>
+        <input id="manualText" placeholder="Type message..." />
+      </div>
+    </main>
+
+    <audio id="replyAudio" style="display:none"></audio>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
