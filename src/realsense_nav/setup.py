@@ -37,6 +37,7 @@ setup(
             'nav_monitor = realsense_nav.nav_monitor:main',
             'behavior_tree_controller = realsense_nav.behavior_tree_controller:main',
             'scene_graph_node = realsense_nav.scene_graph_node:main',
+            'llm_goal_detection = realsense_nav.llm_goal_detection:main',
             'vision_safety_node = realsense_nav.vision_safety_node:main',
             'nl_interpreter = realsense_nav.nl_interpreter:main',
             'topo_planner = realsense_nav.topo_planner:main',

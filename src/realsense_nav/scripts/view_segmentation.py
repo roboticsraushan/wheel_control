@@ -7,13 +7,14 @@ Shows pure pursuit trajectory visualization
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, String
 from geometry_msgs.msg import PointStamped, Point
 from std_msgs.msg import Bool
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import math
+import json
 
 
 class SegmentationViewer(Node):
@@ -41,6 +42,14 @@ class SegmentationViewer(Node):
             Image,
             '/goal/image',
             self.goal_image_cb,
+            10
+        )
+
+        # Subscribe to scene graph (contains YOLO labels and bboxes)
+        self.create_subscription(
+            String,
+            '/scene_graph',
+            self.scene_graph_cb,
             10
         )
         
@@ -79,6 +88,7 @@ class SegmentationViewer(Node):
         self.goal_position = None
         self.centroid = None
         self.goal_detected = False
+        self.scene_graph = None
         
         self.get_logger().info('Segmentation Viewer started')
         self.get_logger().info('Press "q" to quit, "s" to save screenshot')
@@ -118,6 +128,12 @@ class SegmentationViewer(Node):
             self.goal_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as e:
             self.get_logger().error(f'Error converting goal image: {e}')
+
+    def scene_graph_cb(self, msg):
+        try:
+            self.scene_graph = json.loads(msg.data)
+        except Exception:
+            self.scene_graph = None
     
     def display(self):
         if self.seg_image is None:
@@ -136,6 +152,11 @@ class SegmentationViewer(Node):
         # Goal detection image
         if self.goal_image is not None:
             images_to_show.append(self.goal_image)
+
+        # YOLO / scene_graph overlay (drawn on raw image)
+        if self.raw_image is not None and self.scene_graph is not None:
+            yolo_vis = self.draw_yolo_overlay(self.raw_image.copy())
+            images_to_show.append(yolo_vis)
         
         # Resize all to same height
         if len(images_to_show) > 1:
@@ -151,18 +172,15 @@ class SegmentationViewer(Node):
             # Stack horizontally
             display = np.hstack(resized_images)
             
-            # Add labels 
-            # Add labels at bottom
+            # Add labels at bottom for each panel
             label_y = display.shape[0] - 10
-            cv2.putText(display, 'TRAJECTORY', (10, label_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            if len(resized_images) > 1:
-                cv2.putText(display, 'SEGMENTATION', (resized_images[0].shape[1] + 10, label_y), 
+            panel_labels = ['TRAJECTORY', 'SEGMENTATION', 'GOAL DETECTION', 'YOLO']
+            offset = 0
+            for i, img in enumerate(resized_images):
+                lab = panel_labels[i] if i < len(panel_labels) else f'PANEL {i}'
+                cv2.putText(display, lab, (offset + 10, label_y),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            if len(resized_images) > 2:
-                offset = resized_images[0].shape[1] + resized_images[1].shape[1]
-                cv2.putText(display, 'GOAL DETECTION', (offset + 10, label_y), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                offset += img.shape[1]
         else:
             display = images_to_show[0]
         
@@ -255,6 +273,49 @@ class SegmentationViewer(Node):
             cv2.putText(image, f'Combined: {combined_ang:.2f} rad/s', (10, y_offset),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
         
+        return image
+
+    def draw_yolo_overlay(self, image):
+        """Draw YOLO boxes and labels on the provided image using the last scene_graph."""
+        if self.scene_graph is None:
+            return image
+
+        objs = self.scene_graph.get('objects', [])
+        for o in objs:
+            bbox = o.get('bbox', None)
+            label = o.get('label', None)
+            conf = o.get('conf', None)
+            centroid = o.get('centroid_px', None)
+
+            if bbox:
+                try:
+                    x, y, w, h = [int(v) for v in bbox]
+                except Exception:
+                    continue
+                # draw bbox
+                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 165, 255), 2)
+                # prepare label text
+                lab = ''
+                if label:
+                    lab += str(label)
+                if conf is not None:
+                    try:
+                        lab += f' {float(conf):.2f}'
+                    except Exception:
+                        pass
+                if lab:
+                    # draw text background
+                    (tw, th), _ = cv2.getTextSize(lab, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                    cv2.rectangle(image, (x, y - th - 6), (x + tw + 4, y), (0, 165, 255), -1)
+                    cv2.putText(image, lab, (x + 2, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+
+            if centroid:
+                try:
+                    cx, cy = int(centroid[0]), int(centroid[1])
+                    cv2.circle(image, (cx, cy), 4, (0, 0, 255), -1)
+                except Exception:
+                    pass
+
         return image
 
 

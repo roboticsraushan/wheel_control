@@ -24,6 +24,7 @@ def generate_launch_description():
     realsense_nav_dir = get_package_share_directory('realsense_nav')
     wheel_control_dir = get_package_share_directory('wheel_control')
     realsense2_camera_dir = get_package_share_directory('realsense2_camera')
+    segmentation_dir = get_package_share_directory('segmentation')
     
     # RealSense camera launch
     realsense_launch = IncludeLaunchDescription(
@@ -52,22 +53,22 @@ def generate_launch_description():
     # )
     
     # Goal detection node (yellow cone detection)
-    goal_detection_node = Node(
-        package='realsense_nav',
-        executable='goal_detection_node.py',
-        name='goal_detection_node',
-        parameters=[{
-            'yellow_h_min': 3,
-            'yellow_h_max': 19,
-            'yellow_s_min': 49,
-            'yellow_s_max': 159,
-            'yellow_v_min': 106,
-            'yellow_v_max': 255,
-            'min_cone_area': 1400,
-            'max_cone_area': 20900,
-        }],
-        output='log'  # Suppress output
-    )
+    # goal_detection_node = Node(
+    #     package='realsense_nav',
+    #     executable='goal_detection_node.py',
+    #     name='goal_detection_node',
+    #     parameters=[{
+    #         'yellow_h_min': 3,
+    #         'yellow_h_max': 19,
+    #         'yellow_s_min': 49,
+    #         'yellow_s_max': 159,
+    #         'yellow_v_min': 106,
+    #         'yellow_v_max': 255,
+    #         'min_cone_area': 1400,
+    #         'max_cone_area': 20900,
+    #     }],
+    #     output='log'  # Suppress output
+    # )
     
     # Pure pursuit controller (navigation - always runs)
     pure_pursuit_node = Node(
@@ -188,11 +189,45 @@ def generate_launch_description():
         name='scene_graph_viz',
         output='log'
     )
+
+    llm_goal_detection_node = Node(
+        package='realsense_nav',
+        executable='llm_goal_detection.py',
+        name='llm_goal_detection',
+        output='log'
+    )
+
+    view_segmentation_node = Node(
+        package='realsense_nav',
+        executable='view_segmentation.py',
+        name='view_segmentation',
+        output='screen'
+    )
+    # Voice navigator (voice -> LLM -> /llm_goal)
+    voice_navigation_node = Node(
+        package='voice_llm_navigator',
+        executable='voice_navigation',
+        name='voice_navigation',
+        output='screen'
+    )
+    # Segmentation (SegFormer) launch from segmentation package
+    segformer_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(segmentation_dir, 'launch', 'segformer.launch.py')
+        )
+    )
     
+    # Start Foxglove bridge so web-based visualization (Foxglove Studio) can connect on port 8765
+    foxglove_bridge_proc = ExecuteProcess(
+        cmd=['ros2', 'launch', 'foxglove_bridge', 'foxglove_bridge_launch.xml', 'port:=8765'],
+        output='screen'
+    )
+
     return LaunchDescription([
         realsense_launch,
+        segformer_launch,
         # segmentation_node,
-        goal_detection_node,
+        # goal_detection_node,
         pure_pursuit_node,
         behavior_tree_node,
         serial_bridge_node,
@@ -204,4 +239,8 @@ def generate_launch_description():
         vision_safety_node,
         nl_interpreter_node,
         topo_planner_node,
+        scene_graph_viz_node,
+        llm_goal_detection_node,
+        view_segmentation_node,
+        foxglove_bridge_proc,
     ])

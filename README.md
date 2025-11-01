@@ -181,3 +181,46 @@ Parameters you can override:
 
 F310 notes:
 - The config at `src/wheel_control/config/teleop_f310.yaml` maps left stick vertical to forward/back and left stick horizontal to yaw. Hold LB to enable motion; RB is turbo.
+
+## RealSense navigation stack (realsense_nav)
+
+This workspace also contains a small perception + navigation stack that uses a RealSense camera, a segmentation model (SegFormer), YOLO-based scene-graph, and a pure-pursuit controller for local navigation.
+
+Key components
+- `scene_graph_node` (realsense_nav): builds a compact JSON scene graph from YOLO detections or segmentation masks and publishes on `/scene_graph`.
+- `segformer` (segmentation package): SegFormer-based semantic segmentation (used instead of the older color-based segmentation).
+- `llm_goal_detection` (realsense_nav): resolve natural-language goals (`/llm_goal`) into a concrete target from `/scene_graph` and publish `/topo_goal` and `/goal/position` for the planner.
+- `pure_pursuit_controller` (realsense_nav): subscribes to `/goal/position` and `/goal/detected`, computes a local trajectory and publishes `/cmd_vel` for motor control.
+- `serial_motor_bridge` (wheel_control): translates `/cmd_vel` into Arduino motor commands (already documented above).
+- `view_segmentation` (realsense_nav): an OpenCV viewer that displays segmentation, trajectory overlay and a YOLO overlay panel (useful for debugging visual goals).
+
+Launch (full stack)
+The repository includes a single `full_navigation.launch.py` that brings up the camera, SegFormer segmentation, scene graph, LLM goal resolver, controller and serial bridge.
+
+Build and run the full navigation stack:
+```bash
+cd ~/control_one/wheel_control
+source /opt/ros/humble/setup.bash
+colcon build
+source install/setup.bash
+ros2 launch realsense_nav full_navigation.launch.py
+```
+
+Set a goal to the detected chair (example)
+- Publish a short natural-language command; `llm_goal_detection` will resolve it and publish a topo/goals for the planner:
+```bash
+ros2 topic pub /llm_goal std_msgs/msg/String "data: 'go to chair'" -1
+```
+- Verify the resolved target and controller output:
+```bash
+ros2 topic echo /topo_goal --once
+ros2 topic echo /goal/position --once
+ros2 topic echo /cmd_vel
+```
+
+Notes
+- The stack now uses SegFormer (deep model) for semantic segmentation — color-based segmentation is no longer used by default. If you want to switch back to a simple color-based pipeline, edit the launch file or use the older `segmentation_node`.
+- If two goal sources exist (e.g., the legacy `goal_detection_node` detecting a yellow cone and `llm_goal_detection`), the most recent `/goal/position` or `/topo_goal` will be used by the controller; remove or disable the legacy node in the launch if you want the LLM goal to be authoritative.
+- `view_segmentation` shows an additional YOLO overlay panel (label + confidence) when `/scene_graph` contains detections.
+
+Want me to add parameter remaps or tweak the launch to disable the old cone detector by default? I can update the launch file for you.
