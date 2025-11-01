@@ -1,0 +1,17 @@
+Panels: {}
+
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Name: Scene Graph Image
+      Class: rviz_default_plugins/Image
+      Enabled: true
+      Topic: /scene_graph/image
+      Queue Size: 10
+      Transport Hint: raw
+    - Name: Scene Graph Markers
+      Class: rviz_default_plugins/Marker
+      Enabled: true
+      Marker Topic: /scene_graph/markers
+  Global Options:
+    Fixed Frame: camera_link
