@@ -191,12 +191,12 @@ sequenceDiagram
 flowchart TD
     CAMERA([Camera frames]) --> SG[Scene Graph: detections]
     SG --> VIZ[Persist/visualize topo nodes]
-    VIZ --> MAP[Mini-map (robot centric)]
+    VIZ --> MAP["Mini-map (robot centric)"]
     VOICE[[Voice input]] --> OLLAMA[Ollama LLM]
     OLLAMA --> LLMNODE[llm_goal_detection]
     LLMNODE --> GOAL[Selected topo goal]
     GOAL --> CONTROLLER[pure_pursuit_controller]
-    CONTROLLER --> CMD[/cmd_vel]
+    CONTROLLER --> CMD["/cmd_vel"]
     CMD --> BRIDGE
     BRIDGE --> MOTORS
 
@@ -504,12 +504,12 @@ graph TB
     flowchart TD
         CAMERA([Camera frames]) --> SG[Scene Graph: detections]
         SG --> VIZ[Persist/visualize topo nodes]
-        VIZ --> MAP[Mini-map (robot centric)]
+        VIZ --> MAP["Mini-map (robot centric)"]
         VOICE[[Voice input]] --> OLLAMA[Ollama LLM]
         OLLAMA --> LLMNODE[llm_goal_detection]
         LLMNODE --> GOAL[Selected topo goal]
         GOAL --> CONTROLLER[pure_pursuit_controller]
-        CONTROLLER --> CMD[/cmd_vel]
+        CONTROLLER --> CMD["/cmd_vel"]
         CMD --> BRIDGE
         BRIDGE --> MOTORS
 
