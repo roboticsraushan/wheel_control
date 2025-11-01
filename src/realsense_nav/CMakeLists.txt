@@ -60,8 +60,16 @@ install(PROGRAMS
   realsense_nav/behavior_tree_controller.py
   realsense_nav/scene_graph_node.py
   realsense_nav/vision_safety_node.py
+  realsense_nav/scene_graph_viz.py
+  realsense_nav/llm_goal_detection.py
   realsense_nav/nl_interpreter.py
   realsense_nav/topo_planner.py
+  scripts/monitor_segmentation.py
+  scripts/motor_pwm_monitor.py
+  scripts/test_cameras.py
+  scripts/tune_yellow_cone.py
+  scripts/view_segmentation.py
+  
   DESTINATION lib/${PROJECT_NAME}
 )
 

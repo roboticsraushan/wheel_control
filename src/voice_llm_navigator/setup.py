@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 import os
 from glob import glob
 
@@ -7,7 +7,7 @@ package_name = 'voice_llm_navigator'
 setup(
     name=package_name,
     version='0.1.0',
-    packages=[package_name],
+    packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'voice_navigation = voice_llm_navigator.voice_navigation_node:main',
+            'voice_web_bridge = voice_llm_navigator.voice_web_bridge:main',
         ],
     },
 )
