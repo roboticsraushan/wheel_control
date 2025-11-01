@@ -123,13 +123,13 @@ graph TB
     VIZ --> TOPO_MARK
     VIZ --> MINIMAP
 
-    # LLM / voice flow
+    %% LLM / voice flow
     VOICE -->|publishes| LLM_GOAL
     LLM_GOAL --> LLMNODE
     LLMNODE -->|resolves| GOAL_POS
     GOAL_POS --> PCTRL
 
-    # controller and bridge
+    %% controller and bridge
     PCTRL --> CMDVEL
     CMDVEL --> BRIDGE
     BRIDGE -->|Serial 115200| ARD
@@ -137,7 +137,7 @@ graph TB
     MOT --> M1
     MOT --> M2
 
-    # external services
+    %% external services
     VOICE --> OLLAMA
     LLMNODE --> OLLAMA
     FOX -->|connects to ROS| TOPO_MARK
@@ -436,13 +436,13 @@ graph TB
         VIZ --> TOPO_MARK
         VIZ --> MINIMAP
 
-        # LLM / voice flow
+    %% LLM / voice flow
         VOICE -->|publishes| LLM_GOAL
         LLM_GOAL --> LLMNODE
         LLMNODE -->|resolves| GOAL_POS
         GOAL_POS --> PCTRL
 
-        # controller and bridge
+    %% controller and bridge
         PCTRL --> CMDVEL
         CMDVEL --> BRIDGE
         BRIDGE -->|Serial 115200| ARD
@@ -450,7 +450,7 @@ graph TB
         MOT --> M1
         MOT --> M2
 
-        # external services
+    %% external services
         VOICE --> OLLAMA
         LLMNODE --> OLLAMA
         FOX -->|connects to ROS| TOPO_MARK
