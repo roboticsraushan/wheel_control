@@ -156,6 +156,9 @@ def generate_launch_description():
         package='realsense_nav',
         executable='view_world',
         name='view_world',
+        parameters=[{
+            'floorplan_path': '/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'
+        }],
         output='screen'
     )
     

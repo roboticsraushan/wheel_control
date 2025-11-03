@@ -23,17 +23,26 @@ import cv2
 import numpy as np
 import math
 import json
+import yaml
+import os
+from pathlib import Path
 
 
 class WorldViewer(Node):
     def __init__(self):
         super().__init__('world_viewer')
 
+        # Parameters
+        self.declare_parameter('floorplan_path', '')
+        self.floorplan_path = self.get_parameter('floorplan_path').value
+
         self.bridge = CvBridge()
 
         # Subscriptions
         self.create_subscription(Image, '/segmentation/image', self.seg_image_cb, 10)
         self.create_subscription(Image, '/camera/camera/color/image_raw', self.raw_image_cb, 10)
+        # Floorplan (PGM/YAML converted map) published by memory package
+        self.create_subscription(Image, '/memory/floorplan', self.floorplan_cb, 10)
         self.create_subscription(Image, '/goal/image', self.goal_image_cb, 10)
         self.create_subscription(String, '/scene_graph', self.scene_graph_cb, 10)
         self.create_subscription(String, '/scene_graph/detections', self.detections_cb, 10)
@@ -52,6 +61,16 @@ class WorldViewer(Node):
         self.goal_detected = False
         self.scene_graph = None          # snapshot (triggered) scene graph
         self.latest_detections = None   # continuous detections
+        self.floorplan = None            # floorplan image (from memory)
+        self.floorplan_metadata = None
+
+        # If a floorplan path parameter was provided, try loading it from disk
+        if self.floorplan_path:
+            try:
+                self._load_floorplan_from_disk(self.floorplan_path)
+                self.get_logger().info(f'Loaded floorplan from parameter: {self.floorplan_path}')
+            except Exception as e:
+                self.get_logger().error(f'Failed to load floorplan from {self.floorplan_path}: {e}')
 
         self.get_logger().info('World Viewer started')
         self.get_logger().info('Press "q" to quit, "s" to save screenshot')
@@ -92,6 +111,67 @@ class WorldViewer(Node):
             self.goal_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as e:
             self.get_logger().error(f'Error converting goal image: {e}')
+
+    def floorplan_cb(self, msg):
+        try:
+            # floorplan may be gray or bgr; try to convert to bgr for display
+            img = None
+            try:
+                img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            except Exception:
+                try:
+                    gray = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
+                    img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                except Exception:
+                    img = None
+
+            if img is not None:
+                self.floorplan = img
+        except Exception as e:
+            self.get_logger().error(f'Error converting floorplan image: {e}')
+
+    def _load_floorplan_from_disk(self, path: str):
+        """Load a floorplan image (PGM/PNG/JPG) or YAML that points to an image.
+
+        If `path` is a YAML file, attempts to read the `image` field and load
+        that image relative to the YAML's directory.
+        """
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f'Floorplan file not found: {path}')
+
+        # If YAML, load and find image
+        if p.suffix.lower() in ('.yaml', '.yml'):
+            with open(p, 'r') as f:
+                meta = yaml.safe_load(f) or {}
+            img_name = meta.get('image')
+            if not img_name:
+                raise ValueError('YAML floorplan has no "image" field')
+            img_path = (p.parent / img_name).resolve()
+            if not img_path.exists():
+                raise FileNotFoundError(f'Image referenced by YAML not found: {img_path}')
+            load_path = str(img_path)
+            self.floorplan_metadata = meta
+        else:
+            load_path = str(p)
+            # try to find accompanying YAML
+            yaml_candidate = p.with_suffix('.yaml')
+            if yaml_candidate.exists():
+                with open(yaml_candidate, 'r') as f:
+                    self.floorplan_metadata = yaml.safe_load(f) or {}
+            else:
+                self.floorplan_metadata = None
+
+        # Load image (grayscale or color)
+        img = cv2.imread(load_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise RuntimeError(f'Failed to load floorplan image: {load_path}')
+
+        # If single-channel, convert to BGR for display
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+        self.floorplan = img
 
     def scene_graph_cb(self, msg):
         try:
@@ -165,31 +245,59 @@ class WorldViewer(Node):
         return image
 
     def draw_scene_graph_snapshot(self):
-        # Render the snapshot scene_graph on top of the raw image (if available)
-        if self.raw_image is None:
+        # Render the snapshot scene_graph. Prefer raw camera image, but if
+        # that's not available and a floorplan is loaded, show the floorplan
+        # as the background for the snapshot panel (so users can visually
+        # correlate the snapshot with the map).
+        if self.raw_image is None and self.floorplan is None:
             # return a gray placeholder
             return np.full((self.seg_image.shape[0], self.seg_image.shape[1], 3), 80, dtype=np.uint8) if self.seg_image is not None else np.zeros((480,640,3), dtype=np.uint8)
 
-        img = self.raw_image.copy()
+        # Choose background image: raw camera image preferred, otherwise floorplan
+        if self.raw_image is not None:
+            img = self.raw_image.copy()
+        else:
+            # Resize floorplan to match segmentation image height for consistent layout
+            fp = self.floorplan.copy()
+            target_h = self.seg_image.shape[0] if self.seg_image is not None else fp.shape[0]
+            scale = target_h / fp.shape[0]
+            new_w = int(fp.shape[1] * scale)
+            img = cv2.resize(fp, (new_w, target_h))
+
         if self.scene_graph is None:
             cv2.putText(img, 'NO SCENE_GRAPH SNAPSHOT', (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200,200,200), 2)
             return img
 
         objs = self.scene_graph.get('objects', [])
-        for o in objs:
-            bbox = o.get('bbox', None)
-            label = o.get('label', '')
-            conf = o.get('conf', None)
-            if bbox:
-                try:
-                    x, y, w, h = [int(v) for v in bbox]
-                except Exception:
-                    continue
-                cv2.rectangle(img, (x,y), (x+w, y+h), (0,255,0), 2)
-                lab = f'{label} {conf:.2f}' if conf is not None else label
-                (tw, th), _ = cv2.getTextSize(lab, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                cv2.rectangle(img, (x, y - th - 6), (x + tw + 4, y), (0,255,0), -1)
-                cv2.putText(img, lab, (x + 2, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1)
+
+        # If background is floorplan (not camera), draw a compact legend of objects
+        bg_is_floorplan = (self.raw_image is None)
+
+        if bg_is_floorplan:
+            # Draw small numbered markers at left column and list labels
+            x = 12
+            y = 30
+            for i, o in enumerate(objs):
+                lab = f"{o.get('id', i+1)}: {o.get('label','?')} {('%.2f'%o.get('conf')) if o.get('conf') is not None else ''}"
+                cv2.putText(img, lab, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220,220,220), 2)
+                y += 26
+
+        else:
+            # Background is camera image: draw bounding boxes as before
+            for o in objs:
+                bbox = o.get('bbox', None)
+                label = o.get('label', '')
+                conf = o.get('conf', None)
+                if bbox:
+                    try:
+                        x, y, w, h = [int(v) for v in bbox]
+                    except Exception:
+                        continue
+                    cv2.rectangle(img, (x,y), (x+w, y+h), (0,255,0), 2)
+                    lab = f'{label} {conf:.2f}' if conf is not None else label
+                    (tw, th), _ = cv2.getTextSize(lab, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+                    cv2.rectangle(img, (x, y - th - 6), (x + tw + 4, y), (0,255,0), -1)
+                    cv2.putText(img, lab, (x + 2, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 1)
 
         return img
 
@@ -279,11 +387,26 @@ class WorldViewer(Node):
         sg_img = self.draw_scene_graph_snapshot()
         images_to_show.append(sg_img)
 
+        # Floorplan view (from memory)
+        if self.floorplan is not None:
+            fp = self.floorplan.copy()
+        else:
+            # placeholder if no floorplan published
+            fp = np.full((images_to_show[0].shape[0], images_to_show[0].shape[1], 3), 50, dtype=np.uint8)
+            cv2.putText(fp, 'NO FLOORPLAN', (10, fp.shape[0]//2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200,200,200), 2)
+        images_to_show.append(fp)
+
         # Graph view
         gv = self.draw_graph_view()
         images_to_show.append(gv)
 
-        # Resize all to same height and stack
+        # Layout images into a grid with 3 columns.
+        ncols = 3
+        n = len(images_to_show)
+        if n == 0:
+            return
+
+        # Resize all to same height (use the first image height as baseline)
         target_h = images_to_show[0].shape[0]
         resized = []
         for img in images_to_show:
@@ -293,16 +416,52 @@ class WorldViewer(Node):
                 img = cv2.resize(img, (new_w, target_h))
             resized.append(img)
 
-        display = np.hstack(resized)
+        # Determine number of rows and column widths
+        nrows = int(math.ceil(n / ncols))
+        # compute widths per column as max width of items in that column
+        col_widths = [0] * ncols
+        for idx, img in enumerate(resized):
+            col = idx % ncols
+            col_widths[col] = max(col_widths[col], img.shape[1])
 
-        # panel labels
-        label_y = display.shape[0] - 10
-        panel_labels = ['TRAJECTORY', 'SEGMENTATION', 'GOAL DETECTION', 'YOLO LIVE', 'SCENE_GRAPH_SNAPSHOT', 'SCENE_GRAPH_GRAPH']
-        offset = 0
-        for i, img in enumerate(resized):
-            lab = panel_labels[i] if i < len(panel_labels) else f'PANEL {i}'
-            cv2.putText(display, lab, (offset + 10, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-            offset += img.shape[1]
+        # Pad images in each column to the column width
+        padded = []
+        for idx in range(nrows * ncols):
+            if idx < n:
+                img = resized[idx]
+                col = idx % ncols
+                pad_w = col_widths[col] - img.shape[1]
+                if pad_w > 0:
+                    img = cv2.copyMakeBorder(img, 0, 0, 0, pad_w, cv2.BORDER_CONSTANT, value=(0,0,0))
+                padded.append(img)
+            else:
+                # empty placeholder for missing cells
+                col = idx % ncols
+                w = col_widths[col] if col_widths[col] > 0 else target_h
+                placeholder = np.full((target_h, w, 3), 50, dtype=np.uint8)
+                cv2.putText(placeholder, 'EMPTY', (10, target_h//2), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180,180,180), 2)
+                padded.append(placeholder)
+
+        # Build rows by horizontally stacking each group of ncols
+        rows = []
+        for r in range(nrows):
+            row_imgs = padded[r*ncols:(r+1)*ncols]
+            row = np.hstack(row_imgs)
+            rows.append(row)
+
+        # Stack rows vertically
+        display = np.vstack(rows)
+
+        # panel labels per cell
+        panel_labels = ['TRAJECTORY', 'SEGMENTATION', 'GOAL DETECTION', 'YOLO LIVE', 'SCENE_GRAPH_SNAPSHOT', 'FLOORPLAN', 'SCENE_GRAPH_GRAPH']
+        for idx in range(nrows * ncols):
+            r = idx // ncols
+            c = idx % ncols
+            # x offset is sum of previous column widths
+            x_offset = sum(col_widths[:c])
+            y_offset = r * target_h
+            lab = panel_labels[idx] if idx < len(panel_labels) else f'PANEL {idx}'
+            cv2.putText(display, lab, (x_offset + 10, y_offset + target_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
         cv2.imshow('RealSense World', display)
         key = cv2.waitKey(1) & 0xFF
@@ -313,6 +472,14 @@ class WorldViewer(Node):
             filename = f'world_screenshot_{cv2.getTickCount()}.png'
             cv2.imwrite(filename, display)
             self.get_logger().info(f'Saved screenshot: {filename}')
+        elif key == ord('l') or key == ord('L'):
+            # Reload floorplan from configured path
+            if self.floorplan_path:
+                try:
+                    self._load_floorplan_from_disk(self.floorplan_path)
+                    self.get_logger().info(f'Reloaded floorplan: {self.floorplan_path}')
+                except Exception as e:
+                    self.get_logger().error(f'Failed to reload floorplan: {e}')
 
 
 def main():

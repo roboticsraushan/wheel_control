@@ -1,0 +1,39 @@
+# Floorplan Manager Configuration
+
+floorplan_manager:
+  ros__parameters:
+    # Path to floorplan image file
+    floorplan_path: "data/floorplan.png"
+    
+    # Path to floorplan metadata (YAML format)
+    metadata_path: "data/floorplan_metadata.yaml"
+    
+    # Publishing rate (Hz)
+    publish_rate: 1.0
+
+# Semantic Memory Configuration
+semantic_memory:
+  ros__parameters:
+    # Path to semantic map file
+    semantic_map_file: "data/semantic_map.json"
+    
+    # Maximum number of semantic entities to store
+    max_entities: 1000
+    
+    # Publishing rate (Hz)
+    publish_rate: 1.0
+
+# Episodic Memory Configuration
+episodic_memory:
+  ros__parameters:
+    # Directory to store episode files
+    episode_storage_path: "data/episodes"
+    
+    # Maximum number of episodes to keep in memory
+    max_episodes: 1000
+    
+    # Episode timeout in seconds (episodes end if inactive)
+    episode_timeout: 600.0
+    
+    # Publishing rate (Hz)
+    publish_rate: 1.0
