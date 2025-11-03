@@ -9,6 +9,9 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
+import os
+import yaml
 
 
 def generate_launch_description():
@@ -49,7 +52,17 @@ def generate_launch_description():
         description='Maximum angular velocity (rad/s)'
     )
     
-    # RealSense camera node
+    # Load hardware config and forward RealSense args
+    hw_cfg = {}
+    try:
+        cfg_path = os.path.join(get_package_share_directory('realsense_nav'), 'config', 'hardware.yaml')
+        with open(cfg_path, 'r') as f:
+            hw_cfg = yaml.safe_load(f) or {}
+    except Exception:
+        hw_cfg = {}
+
+    rs_cfg = hw_cfg.get('realsense', {})
+
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -59,11 +72,12 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'enable_color': 'true',
-            'enable_depth': 'true',
-            'align_depth.enable': 'true',
+            'enable_color': 'true' if rs_cfg.get('enable_color', True) else 'false',
+            'enable_depth': 'true' if rs_cfg.get('enable_depth', True) else 'false',
+            'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
             'enable_infra1': 'false',
             'enable_infra2': 'false',
+            'serial_no': str(rs_cfg.get('serial', '')),
         }.items()
     )
     

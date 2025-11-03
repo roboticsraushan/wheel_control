@@ -13,46 +13,31 @@ find_package(rclpy REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# Generate messages
+# Generate messages, services, and actions
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BehaviorState.msg"
-  DEPENDENCIES std_msgs
+  "msg/JunctionInfo.msg"
+  "msg/NavigationTask.msg"
+  "msg/JunctionPath.msg"
+  "msg/JunctionDetection.msg"
+  "srv/RecordJunction.srv"
+  "srv/SaveMap.srv"
+  "srv/LoadMap.srv"
+  "srv/GetLastPosition.srv"
+  "action/NavigateToNode.action"
+  "action/NavigateToJunction.action"
+  DEPENDENCIES std_msgs geometry_msgs
 )
 
-# Include directories
-include_directories(include)
-
-# Behavior Tree C++ executable
-add_executable(behavior_tree_cpp_node 
-  src/behavior_tree_cpp_node.cpp
-  src/bt_actions.cpp
-)
-
-ament_target_dependencies(behavior_tree_cpp_node
-  rclcpp
-  geometry_msgs
-  std_msgs
-  behaviortree_cpp_v3
-)
-
-rosidl_target_interfaces(behavior_tree_cpp_node
-  ${PROJECT_NAME} "rosidl_typesupport_cpp"
-)
-
-# Install C++ executables
-install(TARGETS
-  behavior_tree_cpp_node
-  DESTINATION lib/${PROJECT_NAME}
-)
+# Include directories (no longer needed for C++ only)
+# include_directories(include)
 
 # Install Python executables
 install(PROGRAMS
   realsense_nav/segmentation_node.py
   realsense_nav/color_tuner.py
-  realsense_nav/rgb_segmentation_node.py
   realsense_nav/rgb_color_tuner.py
   realsense_nav/goal_detection_node.py
   realsense_nav/pure_pursuit_controller.py
@@ -64,10 +49,25 @@ install(PROGRAMS
   realsense_nav/llm_goal_detection.py
   realsense_nav/nl_interpreter.py
   realsense_nav/topo_planner.py
+  realsense_nav/training/junction_manager_node.py
+  realsense_nav/training/scene_graph_recorder.py
+  realsense_nav/training/enhanced_scene_graph_recorder.py
+  realsense_nav/training/voice_command_node.py
+  realsense_nav/training/topo_map_builder.py
+  realsense_nav/planning/voice_nav_parser.py
+  realsense_nav/planning/graph_path_planner.py
+  realsense_nav/behavior_tree_node.py
+  realsense_nav/navigation/junction_recognizer.py
+  realsense_nav/navigation/junction_navigator.py
+  realsense_nav/navigation/obstacle_aware_navigator.py
+  realsense_nav/navigation/junction_visibility_monitor.py
+  realsense_nav/navigation/simple_odometry.py
+  realsense_nav/navigation/localization_manager.py
+  realsense_nav/task/destination_verifier.py
   scripts/monitor_segmentation.py
   scripts/motor_pwm_monitor.py
   scripts/test_cameras.py
-  scripts/tune_yellow_cone.py
+  scripts/tune_yellow_zone.py
   scripts/view_segmentation.py
   
   DESTINATION lib/${PROJECT_NAME}

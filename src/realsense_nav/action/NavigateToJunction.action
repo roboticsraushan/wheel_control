@@ -1,0 +1,15 @@
+# Goal: Navigate to a specific junction
+string target_junction_id    # Target junction ID (e.g., "J005")
+---
+# Result: Navigation outcome
+bool success                 # True if successfully reached junction
+geometry_msgs/Pose final_pose # Final robot pose
+float64 distance_traveled    # Distance traveled (meters)
+float64 time_elapsed         # Time taken (seconds)
+string message               # Result message or error description
+---
+# Feedback: Progress during junction navigation
+float32 junction_confidence  # Current junction recognition confidence [0, 1]
+float32 distance_remaining   # Estimated distance to junction (meters)
+bool junction_visible        # True if junction is currently visible
+string status                # Current status message

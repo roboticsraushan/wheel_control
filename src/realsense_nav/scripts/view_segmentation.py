@@ -52,6 +52,14 @@ class SegmentationViewer(Node):
             self.scene_graph_cb,
             10
         )
+
+        # Subscribe to continuous YOLO detections (live updates)
+        self.create_subscription(
+            String,
+            '/scene_graph/detections',
+            self.detections_cb,
+            10
+        )
         
         self.create_subscription(
             Float32MultiArray,
@@ -89,6 +97,7 @@ class SegmentationViewer(Node):
         self.centroid = None
         self.goal_detected = False
         self.scene_graph = None
+        self.latest_detections = None
         
         self.get_logger().info('Segmentation Viewer started')
         self.get_logger().info('Press "q" to quit, "s" to save screenshot')
@@ -134,6 +143,12 @@ class SegmentationViewer(Node):
             self.scene_graph = json.loads(msg.data)
         except Exception:
             self.scene_graph = None
+
+    def detections_cb(self, msg):
+        try:
+            self.latest_detections = json.loads(msg.data)
+        except Exception:
+            self.latest_detections = None
     
     def display(self):
         if self.seg_image is None:
@@ -154,7 +169,8 @@ class SegmentationViewer(Node):
             images_to_show.append(self.goal_image)
 
         # YOLO / scene_graph overlay (drawn on raw image)
-        if self.raw_image is not None and self.scene_graph is not None:
+        # Always show YOLO panel if raw image is available, even if no detections yet
+        if self.raw_image is not None:
             yolo_vis = self.draw_yolo_overlay(self.raw_image.copy())
             images_to_show.append(yolo_vis)
         
@@ -276,11 +292,14 @@ class SegmentationViewer(Node):
         return image
 
     def draw_yolo_overlay(self, image):
-        """Draw YOLO boxes and labels on the provided image using the last scene_graph."""
-        if self.scene_graph is None:
-            return image
-
-        objs = self.scene_graph.get('objects', [])
+        """Draw YOLO boxes and labels on the provided image using the latest
+        continuous detections (`/scene_graph/detections`) when available,
+        otherwise fall back to the snapshot `/scene_graph` message."""
+        objs = []
+        if self.latest_detections is not None:
+            objs = self.latest_detections.get('objects', [])
+        elif self.scene_graph is not None:
+            objs = self.scene_graph.get('objects', [])
         for o in objs:
             bbox = o.get('bbox', None)
             label = o.get('label', None)

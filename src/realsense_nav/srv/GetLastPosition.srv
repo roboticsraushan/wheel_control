@@ -1,0 +1,7 @@
+# Request to get the last known position
+---
+bool success                 # True if last position is known
+string junction_id           # Last known junction ID
+geometry_msgs/Pose pose      # Last known pose
+float64 timestamp            # When position was last updated
+string message               # Status message or error description

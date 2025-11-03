@@ -9,13 +9,12 @@ def generate_launch_description():
     allow_download = LaunchConfiguration('allow_download', default='True')
     local_model_dir = LaunchConfiguration('local_model_dir', default='models/segformer-b1-finetuned-ade-512-512')
 
-    # Run the node module directly. Using static param strings here to avoid
-    # compatibility issues with substitution helpers on this ROS distribution.
+    # Run the installed segformer_node_clean executable (console_scripts entry point)
     proc = ExecuteProcess(
         cmd=[
-            'python3', '-m', 'segmentation.segformer_node_clean',
+            'segformer_node_clean',
             '--ros-args',
-            '--param', 'allow_download:=True',
+            '--param', 'allow_download:=False',
             '--param', 'local_model_dir:=models/segformer-b1-finetuned-ade-512-512'
         ],
         output='screen'

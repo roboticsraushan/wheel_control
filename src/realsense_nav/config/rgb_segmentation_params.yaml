@@ -6,6 +6,16 @@ rgb_segmentation_node:
     camera_height: 1080           # 1080p height
     camera_fps: 30                # Frames per second
     
+    # RealSense hardware (optional) -- prefer this when using an Intel RealSense camera
+    # If set, these values can be used to configure the included realsense2_camera launch
+    use_realsense: true
+    realsense_serial: '239222303501'    # Your RealSense device serial number
+    realsense_enable_color: true
+    realsense_enable_depth: true
+    realsense_rgb_profile: '1280x720x30'
+    realsense_depth_profile: '848x480x30'
+    align_depth_enable: true
+    
     # Processing settings
     processing_scale: 0.5         # Scale down for speed (0.5 = 50% = 960x540)
     

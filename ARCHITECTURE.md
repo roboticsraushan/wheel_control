@@ -625,4 +625,152 @@ graph TB
     - Marker lifetimes: persistent topo nodes are published with no automatic lifetime (managed by the publishing node). If you implement auto-removal, use Marker action DELETE with the same `ns`/`id` to remove.
     - Frame transforms: the producer attempts to transform camera-frame coordinates into the `topo_frame` using TF2. If TF is missing the markers may be published in the camera frame; ensure your RViz fixed frame matches the `topo_frame` to see the nodes in robot-centric coordinates.
 
-    ````
+        ````
+
+---
+
+## Junction-Based Topological Navigation System (NEW)
+
+### Overview
+A vision-based topological navigation system using junctions (waypoints) and nodes (semantic locations) for indoor robot navigation.
+
+### ✅ Implemented Components
+
+#### Custom Messages & Services
+- ✅ `JunctionInfo.msg` - Junction metadata with pose and image path
+- ✅ `NavigationTask.msg` - Navigation task specification (source/destination)
+- ✅ `JunctionPath.msg` - Ordered sequence of junctions for navigation
+- ✅ `JunctionDetection.msg` - Junction recognition results with confidence
+- ✅ `RecordJunction.srv` - Service to record junction at current location
+- ✅ `SaveMap.srv` - Service to save topological map to disk
+- ✅ `LoadMap.srv` - Service to load topological map from disk
+- ✅ `GetLastPosition.srv` - Service to retrieve last known position
+- ✅ `NavigateToNode.action` - High-level node-to-node navigation action
+- ✅ `NavigateToJunction.action` - Low-level junction navigation action
+
+#### Training Phase Components
+- ✅ **Junction Manager** (`junction_manager_node.py`)
+  - Records junctions with RGB images, pose, and scene graph
+  - Voice-activated recording ("record junction")
+  - Line-of-sight verification between consecutive junctions
+  - Auto-saves junction database
+  - Topics: `/voice/command`, `/camera/camera/color/image_raw`, `/junction/status`, `/junction/recorded`
+  - Services: `~/record_junction`, `~/save_map`
+
+- ✅ **Scene Graph Recorder** (`scene_graph_recorder.py`)
+  - Associates detected objects with junctions
+  - Stores scene graph snapshots per junction
+  - Builds node-junction associations
+  - Topics: `/scene_graph`, `/junction/recorded`
+
+- ✅ **Topological Map Builder** (`topo_map_builder.py`)
+  - Builds navigation graph from recorded junctions
+  - Computes edges between consecutive junctions
+  - Extracts unique nodes from scene graphs
+  - Service: `~/load_map`
+
+#### Planning Phase Components
+- ✅ **Voice Navigation Parser** (`voice_nav_parser.py`)
+  - Parses voice commands for navigation intent
+  - Extracts destination nodes from natural language
+  - Topics: `/voice/command` → `/navigation/task`
+
+- ✅ **Graph Path Planner** (`graph_path_planner.py`)
+  - A* pathfinding on junction graph
+  - Node-to-junction lookup
+  - Generates ordered junction sequences
+  - Topics: `/navigation/task` → `/navigation/junction_path`
+
+#### Navigation Phase Components
+- ✅ **Junction Recognizer** (`junction_recognizer.py`)
+  - ORB feature-based visual junction matching
+  - Real-time similarity scoring
+  - Expected junction tracking
+  - Configurable thresholds (confidence, min matches)
+  - Topics: `/camera/camera/color/image_raw`, `/navigation/expected_junction` → `/junction/detected`
+
+- ✅ **Junction Navigator** (`junction_navigator.py`)
+  - Junction-to-junction navigation control
+  - Monitors recognition confidence for arrival detection
+  - Publishes cmd_vel for robot motion
+  - Manages junction sequence traversal
+  - Topics: `/navigation/junction_path`, `/junction/detected` → `/cmd_vel`, `/navigation/expected_junction`
+
+- ✅ **Localization Manager** (`localization_manager.py`)
+  - Tracks robot position in junction graph
+  - Persists last known position to disk
+  - Recovers state on startup
+  - Topics: `/junction/detected` → `/robot/current_junction`
+  - Service: `~/get_last_position`
+
+#### Task Completion Components
+- ✅ **Destination Verifier** (`destination_verifier.py`)
+  - Verifies arrival at destination node
+  - Matches current scene graph with destination
+  - Triggers task completion
+  - Topics: `/scene_graph`, `/navigation/task`, `/robot/current_junction` → `/navigation/arrived`, `/task/start_inspection`
+
+#### Launch Files
+- ✅ `training_mode.launch.py` - Launches training components for junction recording
+- ✅ `junction_navigation.launch.py` - Launches all navigation components for autonomous navigation
+
+### Data Storage Structure
+```
+data/
+├── junctions/           # Junction images and metadata
+│   ├── J001_*.jpg
+│   ├── J001_scene_graph.json
+│   └── junctions.json   # All junction metadata
+├── nodes/              # Semantic node images (future)
+└── maps/               # Topological maps
+    ├── map_*.json
+    └── localization_state.json
+```
+
+### Usage Examples
+
+**Training Mode:**
+```bash
+# Launch training system
+ros2 launch realsense_nav training_mode.launch.py
+
+# Record junction via service
+ros2 service call /junction_manager/record_junction realsense_nav/srv/RecordJunction "{junction_name: 'kitchen_entrance'}"
+
+# Or via voice command (if voice interface connected)
+# Say: "record junction"
+
+# Save map
+ros2 service call /junction_manager/save_map realsense_nav/srv/SaveMap "{filename: 'building_floor1.json'}"
+```
+
+**Navigation Mode:**
+```bash
+# Launch navigation system
+ros2 launch realsense_nav junction_navigation.launch.py
+
+# Send navigation task
+ros2 topic pub /navigation/task std_msgs/String "data: '{\"destination_node\": \"dining_table\"}'" --once
+
+# Monitor status
+ros2 topic echo /navigation/status
+ros2 topic echo /junction/detected
+```
+
+### ⏳ Pending Enhancements
+- Junction visibility monitoring during navigation
+- Junction-aware local path planning with obstacle avoidance
+- Integration with existing behavior tree for state management
+- Connection to voice_llm_navigator for voice commands
+- Robot pose publisher (currently using default poses)
+- Parameter tuning and testing in real environment
+
+### Integration with Existing System
+The junction-based navigation system integrates with:
+- **Scene Graph**: Uses existing `/scene_graph` topic from `scene_graph_node.py`
+- **Camera**: Subscribes to existing RealSense camera topics
+- **Motor Control**: Publishes to `/cmd_vel` like existing controllers
+- **Voice Interface**: Can connect to existing `voice_llm_navigator` package
+
+---
+`````

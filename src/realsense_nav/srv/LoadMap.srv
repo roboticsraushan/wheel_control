@@ -1,0 +1,8 @@
+# Request to load a topological map from disk
+string filename              # Filename to load (optional, use default if empty)
+---
+bool success                 # True if map was loaded
+string filepath              # Full path of loaded map
+int32 num_junctions          # Number of junctions in loaded map
+int32 num_nodes              # Number of nodes in loaded map
+string message               # Status message or error description

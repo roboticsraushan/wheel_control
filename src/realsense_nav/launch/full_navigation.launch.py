@@ -12,11 +12,13 @@ Brings up:
 """
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, ExecuteProcess
+from launch.actions import IncludeLaunchDescription, ExecuteProcess, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
+import yaml
 
 
 def generate_launch_description():
@@ -25,6 +27,30 @@ def generate_launch_description():
     wheel_control_dir = get_package_share_directory('wheel_control')
     realsense2_camera_dir = get_package_share_directory('realsense2_camera')
     segmentation_dir = get_package_share_directory('segmentation')
+
+    # Load hardware config
+    hw_cfg = {}
+    try:
+        cfg_path = os.path.join(realsense_nav_dir, 'config', 'hardware.yaml')
+        with open(cfg_path, 'r') as f:
+            hw_cfg = yaml.safe_load(f) or {}
+    except Exception:
+        hw_cfg = {}
+
+    rs_cfg = hw_cfg.get('realsense', {})
+    motors_cfg = hw_cfg.get('motors', {})
+
+    # Declare launch arguments with defaults from hardware config
+    serial_no_arg = DeclareLaunchArgument('serial_no', default_value=str(rs_cfg.get('serial', '')),
+                                         description='RealSense serial number')
+    motor_port_arg = DeclareLaunchArgument('motor_port', default_value=str(motors_cfg.get('serial_port', '/dev/ttyACM0')),
+                                          description='Serial port for motor Arduino')
+    motor_baud_arg = DeclareLaunchArgument('motor_baud', default_value=str(motors_cfg.get('baud', 115200)),
+                                          description='Baud rate for motor Arduino')
+
+    serial_no = LaunchConfiguration('serial_no')
+    motor_port = LaunchConfiguration('motor_port')
+    motor_baud = LaunchConfiguration('motor_baud')
     
     # RealSense camera launch
     realsense_launch = IncludeLaunchDescription(
@@ -32,11 +58,12 @@ def generate_launch_description():
             os.path.join(realsense2_camera_dir, 'launch', 'rs_launch.py')
         ),
         launch_arguments={
-            'enable_color': 'true',
-            'enable_depth': 'true',
-            'rgb_camera.profile': '1280x720x30',
-            'depth_module.profile': '848x480x30',
-            'align_depth.enable': 'true',
+            'enable_color': 'true' if rs_cfg.get('enable_color', True) else 'false',
+            'enable_depth': 'true' if rs_cfg.get('enable_depth', True) else 'false',
+            'rgb_camera.profile': rs_cfg.get('rgb_profile', '1280x720x30'),
+            'depth_module.profile': rs_cfg.get('depth_profile', '848x480x30'),
+            'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
+            'serial_no': serial_no,
         }.items()
     )
     
@@ -73,7 +100,7 @@ def generate_launch_description():
     # Pure pursuit controller (navigation - always runs)
     pure_pursuit_node = Node(
         package='realsense_nav',
-        executable='pure_pursuit_controller.py',
+        executable='pure_pursuit_controller',
         name='pure_pursuit_controller',
         parameters=[{
             'lookahead_distance': 0.5,
@@ -89,7 +116,7 @@ def generate_launch_description():
     # Behavior Tree manager (state management - always runs)
     behavior_tree_node = Node(
         package='realsense_nav',
-        executable='behavior_tree_cpp_node',
+        executable='behavior_tree_node',
         name='behavior_tree_manager',
         output='screen'  # Show behavior tree status
     )
@@ -100,10 +127,10 @@ def generate_launch_description():
         executable='serial_motor_bridge',
         name='serial_motor_bridge',
         parameters=[{
-            'port': '/dev/ttyACM0',
-            'baud': 115200,
-            'wheel_separation': 0.40,
-            'max_speed_mps': 1.0,
+            'port': motor_port,
+            'baud': LaunchConfiguration('motor_baud'),
+            'wheel_separation': float(motors_cfg.get('wheel_separation', 0.40)),
+            'max_speed_mps': float(motors_cfg.get('max_speed_mps', 1.0)),
         }],
         output='screen'  # Show Arduino commands
     )
@@ -152,7 +179,7 @@ def generate_launch_description():
     # Vision-only pipeline nodes (scene graph, safety, NL interpreter, topo planner)
     scene_graph_node = Node(
         package='realsense_nav',
-        executable='scene_graph_node.py',
+        executable='scene_graph_node',
         name='scene_graph_node',
         parameters=[{
             'use_yolo': True,
@@ -164,45 +191,39 @@ def generate_launch_description():
 
     vision_safety_node = Node(
         package='realsense_nav',
-        executable='vision_safety_node.py',
+        executable='vision_safety_node',
         name='vision_safety_node',
         output='log'
     )
 
     nl_interpreter_node = Node(
         package='realsense_nav',
-        executable='nl_interpreter.py',
+        executable='nl_interpreter',
         name='nl_interpreter',
         output='log'
     )
 
     topo_planner_node = Node(
         package='realsense_nav',
-        executable='topo_planner.py',
+        executable='topo_planner',
         name='topo_planner',
         output='log'
     )
 
     scene_graph_viz_node = Node(
         package='realsense_nav',
-        executable='scene_graph_viz.py',
+        executable='scene_graph_viz',
         name='scene_graph_viz',
         output='log'
     )
 
     llm_goal_detection_node = Node(
         package='realsense_nav',
-        executable='llm_goal_detection.py',
+        executable='llm_goal_detection',
         name='llm_goal_detection',
         output='log'
     )
 
-    view_segmentation_node = Node(
-        package='realsense_nav',
-        executable='view_segmentation.py',
-        name='view_segmentation',
-        output='screen'
-    )
     # Voice navigator (voice -> LLM -> /llm_goal)
     voice_navigation_node = Node(
         package='voice_llm_navigator',
@@ -224,6 +245,9 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        serial_no_arg,
+        motor_port_arg,
+        motor_baud_arg,
         realsense_launch,
         segformer_launch,
         # segmentation_node,
@@ -241,6 +265,5 @@ def generate_launch_description():
         topo_planner_node,
         scene_graph_viz_node,
         llm_goal_detection_node,
-        view_segmentation_node,
         foxglove_bridge_proc,
     ])

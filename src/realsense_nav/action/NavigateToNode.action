@@ -1,0 +1,17 @@
+# Goal: Navigate to a named node
+string destination_node      # Target node ID (e.g., "dining_table_kitchen")
+---
+# Result: Navigation outcome
+bool success                 # True if successfully reached destination
+string final_junction        # Final junction ID where robot stopped
+float64 distance_traveled    # Total distance traveled (meters)
+float64 time_elapsed         # Time taken (seconds)
+string message               # Result message or error description
+---
+# Feedback: Progress updates during navigation
+string current_junction      # Current junction ID
+string next_junction         # Next target junction ID
+int32 junctions_completed    # Number of junctions reached
+int32 total_junctions        # Total junctions in path
+float32 progress_percent     # Progress percentage [0, 100]
+string status                # Current status message

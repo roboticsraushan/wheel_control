@@ -29,22 +29,13 @@ class SceneGraphNode(Node):
         self.yolo_model_name = self.get_parameter('yolo_model').value
         self.yolo_conf = float(self.get_parameter('yolo_conf').value)
 
-        # Try to load YOLO if requested
+        # This node does NOT run YOLO continuously. Instead it listens to
+        # `/scene_graph/detections` published by a separate detector node and
+        # will only publish a scene graph snapshot when a trigger is received.
         self.yolo = None
-        if self.use_yolo:
-            try:
-                from ultralytics import YOLO
-                self.get_logger().info(f'Loading YOLO model: {self.yolo_model_name}')
-                self.yolo = YOLO(self.yolo_model_name)
-                # try to move to GPU if available
-                try:
-                    self.yolo.to('cuda')
-                    self.get_logger().info('YOLO model moved to CUDA')
-                except Exception:
-                    self.get_logger().info('YOLO model running on CPU')
-            except Exception as e:
-                self.get_logger().warn(f'Failed to load ultralytics YOLO: {e}. Falling back to mask-based detection.')
-                self.yolo = None
+        self.latest_detections = None
+        # subscribe to continuous detections (published by yolo_detector)
+        self.create_subscription(String, '/scene_graph/detections', self.detections_cb, 10)
         self.bridge = CvBridge()
         self.latest_color = None
         self.latest_depth = None
@@ -58,6 +49,15 @@ class SceneGraphNode(Node):
 
         self.timer = self.create_timer(0.5, self.publish_scene_graph)
         self.get_logger().info('SceneGraphNode initialized')
+
+        self.trigger_received = False
+        self.create_subscription(String, '/scene_graph/trigger', self.trigger_cb, 10)
+
+    def detections_cb(self, msg):
+        try:
+            self.latest_detections = json.loads(msg.data).get('objects', [])
+        except Exception:
+            self.latest_detections = None
 
     def color_cb(self, msg):
         try:
@@ -77,50 +77,37 @@ class SceneGraphNode(Node):
         except Exception as e:
             self.get_logger().debug(f'mask convert failed: {e}')
 
+    def trigger_cb(self, msg):
+        self.trigger_received = True
+        self.get_logger().info('Trigger received for scene graph creation.')
+
     def publish_scene_graph(self):
-        # Prefer YOLO detections when available
+        # Only publish on explicit trigger
+        if not self.trigger_received:
+            return
+
+        self.trigger_received = False
+
+        # Prefer detections published by the continuous detector
         objects = []
-        if self.yolo is not None and self.latest_color is not None:
+        if self.latest_detections:
             try:
-                # ultralytics expects RGB images
-                img_rgb = cv2.cvtColor(self.latest_color, cv2.COLOR_BGR2RGB)
-                results = self.yolo(img_rgb, conf=self.yolo_conf)
-                # results may be a list; take first
-                res = results[0]
-                boxes = getattr(res, 'boxes', None)
-                names = getattr(self.yolo, 'names', None) or {}
-                if boxes is not None:
-                    for i, b in enumerate(boxes.data.tolist()):
-                        # b = [x1, y1, x2, y2, conf, cls]
-                        x1, y1, x2, y2, conf, cls = b
-                        x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
-                        cx = int(x1 + w / 2)
-                        cy = int(y1 + h / 2)
-                        label = names.get(int(cls), str(int(cls)))
-
-                        depth_m = None
-                        if self.latest_depth is not None:
-                            h_d, w_d = self.latest_depth.shape[:2]
-                            if 0 <= cy < h_d and 0 <= cx < w_d:
-                                z = float(self.latest_depth[cy, cx])
-                                if z > 10:
-                                    depth_m = z / 1000.0
-                                else:
-                                    depth_m = z
-
-                        obj = {
-                            'id': i + 1,
-                            'label': label,
-                            'conf': float(conf),
-                            'bbox': [x, y, w, h],
-                            'centroid_px': [cx, cy],
-                            'depth_m': depth_m,
-                        }
-                        objects.append(obj)
+                # assume detections already contain id, bbox, centroid_px, depth_m
+                for o in self.latest_detections:
+                    # canonicalize minimal fields
+                    obj = {
+                        'id': int(o.get('id', 0)),
+                        'label': o.get('label'),
+                        'conf': float(o.get('conf')) if o.get('conf') is not None else None,
+                        'bbox': [int(v) for v in o.get('bbox', [])],
+                        'centroid_px': [int(v) for v in o.get('centroid_px', [])] if o.get('centroid_px') else None,
+                        'depth_m': o.get('depth_m'),
+                    }
+                    objects.append(obj)
             except Exception as e:
-                self.get_logger().warn(f'YOLO detection failed: {e} — falling back to mask CC')
+                self.get_logger().warn(f'Failed to decode latest_detections: {e}')
 
-        # Fallback / additional: use segmentation connected components when no YOLO
+        # Fallback / additional: use segmentation connected components when no detections
         if not objects and self.latest_mask is not None:
             mask = self.latest_mask.copy()
             num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
@@ -151,6 +138,7 @@ class SceneGraphNode(Node):
         msg = String()
         msg.data = json.dumps(sg)
         self.sg_pub.publish(msg)
+        self.get_logger().info('Scene graph published.')
 
 
 def main(args=None):

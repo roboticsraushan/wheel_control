@@ -1,0 +1,8 @@
+# Request to save the topological map to disk
+string filename              # Filename to save (optional, use default if empty)
+---
+bool success                 # True if map was saved
+string filepath              # Full path where map was saved
+int32 num_junctions          # Number of junctions in saved map
+int32 num_nodes              # Number of nodes in saved map
+string message               # Status message or error description

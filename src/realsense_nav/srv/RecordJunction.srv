@@ -1,0 +1,6 @@
+# Request to record a junction at current location
+string junction_name         # Optional name/label for junction
+---
+bool success                 # True if junction was recorded
+string junction_id           # ID of recorded junction
+string message               # Status message or error description

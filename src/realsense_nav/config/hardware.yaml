@@ -1,0 +1,16 @@
+realsense:
+  use_realsense: true
+  serial: '239222303501'
+  enable_color: true
+  enable_depth: true
+  rgb_profile: '1280x720x30'
+  depth_profile: '848x480x30'
+  align_depth: true
+
+motors:
+  serial_port: '/dev/ttyACM0'
+  baud: 115200
+  wheel_separation: 0.40
+  max_speed_mps: 1.0
+
+# Other hardware settings can be added here (imu, lidar, etc.)
