@@ -162,6 +162,59 @@ def generate_launch_description():
         output='screen'
     )
     
+    # Floorplan manager (publishes /memory/floorplan and metadata)
+    # Use ExecuteProcess to run the installed python script directly so the
+    # launch works even if the ament index isn't available in the current env.
+    floorplan_script = os.path.join(
+        os.path.abspath(os.path.join(realsense_nav_dir, '..', '..')), 'install', 'memory', 'lib', 'memory', 'floorplan_manager_node.py'
+    )
+    # Fallback path if running from workspace root
+    if not os.path.exists(floorplan_script):
+        floorplan_script = os.path.join(os.getcwd(), 'install', 'memory', 'lib', 'memory', 'floorplan_manager_node.py')
+
+    floorplan_manager_process = ExecuteProcess(
+        cmd=['/usr/bin/env', 'python3', floorplan_script,
+             '--ros-args',
+             '--param', "floorplan_path:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'",
+             '--param', "metadata_path:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'",
+             '--param', 'publish_rate:=1.0'
+            ],
+        output='screen'
+    )
+    
+    # Map loader: publish OccupancyGrid built from YAML+PGM to /map
+    map_loader_script = os.path.join(
+        os.path.abspath(os.path.join(realsense_nav_dir, '..', '..')), 'install', 'memory', 'lib', 'memory', 'map_loader_node.py'
+    )
+    # Fallback path if running from workspace root
+    if not os.path.exists(map_loader_script):
+        map_loader_script = os.path.join(os.getcwd(), 'install', 'memory', 'lib', 'memory', 'map_loader_node.py')
+
+    map_loader_process = ExecuteProcess(
+        cmd=['/usr/bin/env', 'python3', map_loader_script,
+             '--ros-args',
+             '--param', "map_yaml:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'",
+             '--param', "map_topic:='/map'",
+             '--param', 'publish_rate:=1.0'
+            ],
+        output='screen'
+    )
+   
+    # Semantic visualizer node
+    semantic_visualizer_node = Node(
+        package='realsense_nav',
+        executable='semantic_visualizer_node',
+        name='semantic_visualizer',
+        parameters=[{
+            'map_yaml_path': 'data/maps/my_floorplan.yaml',
+            'junction_db_path': 'data/junctions/junction_db.json',
+            'topo_map_path': 'data/maps/topological_map.json',
+            'web_port': 8080,
+            'websocket_port': 8081,
+        }],
+        output='screen'
+    )
+
     return LaunchDescription([
         realsense_launch,
         yolo_detector_node,
@@ -170,6 +223,9 @@ def generate_launch_description():
         scene_graph_recorder_node,
         voice_command_node,
         odometry_node,
-    segformer_node,
-    view_world_node,
+        segformer_node,
+        floorplan_manager_process,
+        map_loader_process,
+        view_world_node,
+        semantic_visualizer_node,
     ])

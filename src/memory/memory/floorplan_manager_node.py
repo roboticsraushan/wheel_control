@@ -20,6 +20,7 @@ Services:
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from nav_msgs.msg import OccupancyGrid, MapMetaData
 from geometry_msgs.msg import PointStamped, Point
 from std_msgs.msg import String
 from cv_bridge import CvBridge
@@ -58,6 +59,8 @@ class FloorplanManager(Node):
         self.robot_position_pub = self.create_publisher(
             PointStamped, '/memory/robot_position', 10
         )
+        # Also publish an OccupancyGrid so RViz can load the map as a Map display
+        self.occupancy_pub = self.create_publisher(OccupancyGrid, '/map', 10)
 
         # Subscribers
         self.create_subscription(
@@ -142,6 +145,52 @@ class FloorplanManager(Node):
             metadata_msg = String()
             metadata_msg.data = json.dumps(self.floorplan_metadata)
             self.floorplan_info_pub.publish(metadata_msg)
+
+            # Also publish an OccupancyGrid built from the floorplan image and metadata
+            try:
+                # Convert to grayscale
+                gray = cv2.cvtColor(self.floorplan_image, cv2.COLOR_BGR2GRAY) if len(self.floorplan_image.shape) == 3 else self.floorplan_image.copy()
+
+                # Flip vertically because image origin is top-left, OccupancyGrid expects origin at bottom-left
+                gray_flipped = cv2.flip(gray, 0)
+
+                # Threshold to occupancy: pixels darker than threshold -> occupied
+                thresh = self.floorplan_metadata.get('occupied_threshold', 128) if isinstance(self.floorplan_metadata, dict) else 128
+                _, occ = cv2.threshold(gray_flipped, int(thresh), 100, cv2.THRESH_BINARY_INV)
+
+                # Map to 0 (free) / 100 (occupied)
+                # After thresholding, occ pixels are 0 or 100
+                data = occ.flatten().tolist()
+
+                # Compose OccupancyGrid
+                grid = OccupancyGrid()
+                grid.header.stamp = floorplan_msg.header.stamp
+                grid.header.frame_id = 'map'
+
+                info = MapMetaData()
+                resolution = float(self.floorplan_metadata.get('resolution', 0.05)) if isinstance(self.floorplan_metadata, dict) else 0.05
+                info.resolution = resolution
+                info.width = int(gray_flipped.shape[1])
+                info.height = int(gray_flipped.shape[0])
+
+                origin = self.floorplan_metadata.get('origin', {}) if isinstance(self.floorplan_metadata, dict) else {}
+                ox = float(origin.get('x', 0.0)) if isinstance(origin, dict) else 0.0
+                oy = float(origin.get('y', 0.0)) if isinstance(origin, dict) else 0.0
+                info.origin.position.x = ox
+                info.origin.position.y = oy
+                info.origin.position.z = 0.0
+                info.origin.orientation.x = 0.0
+                info.origin.orientation.y = 0.0
+                info.origin.orientation.z = 0.0
+                info.origin.orientation.w = 1.0
+
+                grid.info = info
+                # Ensure values are in [-1,100]
+                grid.data = [int(v) if v >= 0 else -1 for v in data]
+
+                self.occupancy_pub.publish(grid)
+            except Exception as e:
+                self.get_logger().error(f'Failed to publish occupancy grid: {e}')
 
         except Exception as e:
             self.get_logger().error(f'Failed to publish floorplan: {e}')

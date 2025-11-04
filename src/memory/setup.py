@@ -32,6 +32,7 @@ setup(
             'floorplan_converter = memory.floorplan_converter_node:main',
             'semantic_memory = memory.semantic_memory_node:main',
             'episodic_memory = memory.episodic_memory_node:main',
+            'map_loader_node = memory.map_loader_node:main',
         ],
     },
 )

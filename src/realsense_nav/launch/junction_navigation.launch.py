@@ -159,6 +159,21 @@ def generate_launch_description():
         output='screen'
     )
     
+    # Semantic visualizer node
+    semantic_visualizer = Node(
+        package='realsense_nav',
+        executable='semantic_visualizer_node',
+        name='semantic_visualizer',
+        parameters=[{
+            'map_yaml_path': 'data/maps/my_floorplan.yaml',
+            'junction_db_path': 'data/junctions/junction_db.json',
+            'topo_map_path': 'data/maps/topological_map.json',
+            'web_port': 8080,
+            'websocket_port': 8081,
+        }],
+        output='screen'
+    )
+    
     return LaunchDescription([
         serial_no_arg,
         realsense_launch,
@@ -172,4 +187,5 @@ def generate_launch_description():
         odometry_node,
         localization_manager,
         destination_verifier,
+        semantic_visualizer,
     ])

@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'visualization'), glob('realsense_nav/visualization/*.json')),
+        (os.path.join('share', package_name, 'visualization', 'web'), glob('realsense_nav/visualization/web/*')),
     ],
     install_requires=['setuptools', 'py_trees'],
     zip_safe=True,
@@ -51,6 +53,8 @@ setup(
             'voice_command = realsense_nav.training.voice_command_node:main',
             # Navigation utilities
             'simple_odometry = realsense_nav.navigation.simple_odometry:main',
+            # Visualization
+            'semantic_visualizer_node = realsense_nav.visualization.semantic_visualizer_node:main',
         ],
     },
 )
