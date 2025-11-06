@@ -27,7 +27,7 @@ class SegFormerNode(Node):
         self.declare_parameter('robot_footprint_size', 0.4)  # 40cm in meters
         self.declare_parameter('pixels_per_meter', 200.0)  # Approximate scaling factor
         self.declare_parameter('obstacle_inflation_radius', 0.3)  # 30cm safety margin in meters
-        self.declare_parameter('cost_scaling_factor', 2.0)  # How much to penalize near-obstacle paths
+        self.declare_parameter('cost_scaling_factor', 5.0)  # How much to penalize near-obstacle paths (higher = more curve)
 
         self.model_name = self.get_parameter('model_name').value
         self.local_model_dir = self.get_parameter('local_model_dir').value
@@ -96,7 +96,7 @@ class SegFormerNode(Node):
         """
         Mark obstacles (non-floor) with red color and inflation zone.
         Only processes within 1 meter range for performance.
-        Returns: (overlay_mask, elapsed_time_ms)
+        Returns: (overlay_mask, costmap, elapsed_time_ms)
         """
         import time
         start_time = time.time()
@@ -109,8 +109,9 @@ class SegFormerNode(Node):
         # Only process bottom portion (within 1 meter from camera)
         process_height = min(one_meter_pixels, h)
         
-        # Create colored overlay
+        # Create colored overlay and costmap
         obstacle_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        costmap = np.zeros((h, w), dtype=np.float32)
         
         # Process only the bottom region
         process_region = floor_mask[h - process_height:h, :]
@@ -118,14 +119,34 @@ class SegFormerNode(Node):
         # Calculate distance transform for inflation
         dist_transform = cv2.distanceTransform(process_region, cv2.DIST_L2, 5)
         
-        # Convert inflation radius to pixels
+        # Convert radii to pixels
+        robot_radius_pixels = int((self.robot_footprint_size / 2) * self.pixels_per_meter)
         inflation_radius_pixels = int(self.obstacle_inflation_radius * self.pixels_per_meter)
+        total_radius = robot_radius_pixels + inflation_radius_pixels
         
-        # Create masks
+        # Create masks for different zones
         obstacle_mask = process_region == 0
-        inflation_mask = (dist_transform > 0) & (dist_transform <= inflation_radius_pixels)
+        lethal_mask = (dist_transform > 0) & (dist_transform <= robot_radius_pixels)
+        inflation_mask = (dist_transform > robot_radius_pixels) & (dist_transform <= total_radius)
         
-        # Mark obstacles in red
+        # Create region costmap
+        region_costmap = np.zeros((process_height, w), dtype=np.float32)
+        
+        # Assign costs
+        region_costmap[obstacle_mask] = 255.0  # Obstacles - impassable
+        region_costmap[lethal_mask] = 254.0    # Lethal zone (robot can't fit)
+        
+        # Inflation zone - gradient cost (stronger penalty)
+        if np.any(inflation_mask):
+            distances = dist_transform[inflation_mask]
+            # Cost decreases from 250 to 50 as distance increases
+            ratios = (total_radius - distances) / (total_radius - robot_radius_pixels + 1e-6)
+            region_costmap[inflation_mask] = (250.0 * ratios * self.cost_scaling_factor).clip(50, 250)
+        
+        # Copy to full costmap
+        costmap[h - process_height:h, :] = region_costmap
+        
+        # Create visualization overlay
         region_overlay = np.zeros((process_height, w, 3), dtype=np.uint8)
         region_overlay[obstacle_mask] = (0, 0, 255)  # Red for obstacles
         
@@ -133,7 +154,7 @@ class SegFormerNode(Node):
         if np.any(inflation_mask):
             # Gradient from red to yellow based on distance
             distances = dist_transform[inflation_mask]
-            ratios = distances / inflation_radius_pixels
+            ratios = distances / total_radius
             # Orange to yellow gradient
             region_overlay[inflation_mask, 0] = (255 * ratios).astype(np.uint8)  # Blue channel
             region_overlay[inflation_mask, 1] = (165 + 90 * ratios).astype(np.uint8)  # Green channel
@@ -144,12 +165,12 @@ class SegFormerNode(Node):
         
         elapsed_time = (time.time() - start_time) * 1000  # Convert to ms
         
-        return obstacle_overlay, elapsed_time
+        return obstacle_overlay, costmap, elapsed_time
 
-    def find_floor_path(self, mask, start, end):
+    def find_floor_path(self, mask, start, end, costmap=None):
         """
         Find a path from start to end that stays on the floor (mask > 0).
-        Uses a simplified A* pathfinding algorithm.
+        Uses A* pathfinding algorithm with costmap penalties for obstacle avoidance.
         """
         import heapq
         
@@ -160,6 +181,8 @@ class SegFormerNode(Node):
         # If start or end is not on floor, return direct line
         if mask[start_y, start_x] == 0 or mask[end_y, end_x] == 0:
             return [start, end]
+        
+        use_costmap = costmap is not None
         
         # A* pathfinding
         def heuristic(pos):
@@ -174,7 +197,7 @@ class SegFormerNode(Node):
         # 8-directional movement
         directions = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
         
-        max_iterations = 5000
+        max_iterations = 10000
         iterations = 0
         
         while open_set and iterations < max_iterations:
@@ -202,8 +225,27 @@ class SegFormerNode(Node):
                 if mask[ny, nx] == 0:
                     continue
                 
+                # Skip if in lethal zone (cost >= 254)
+                if use_costmap and costmap[ny, nx] >= 254:
+                    continue
+                
                 neighbor = (nx, ny)
-                tentative_g_score = g_score[current] + np.sqrt(dx**2 + dy**2)
+                
+                # Calculate movement cost
+                movement_cost = np.sqrt(dx**2 + dy**2)
+                
+                # Add strong costmap penalty to make paths curve around obstacles
+                if use_costmap:
+                    cost_value = costmap[ny, nx]
+                    # Exponential penalty for high-cost areas
+                    if cost_value > 50:
+                        # Scale: cost 50-250 becomes penalty 1-20
+                        cost_penalty = ((cost_value - 50) / 200.0) ** 2 * 20
+                    else:
+                        cost_penalty = 0
+                    movement_cost += cost_penalty
+                
+                tentative_g_score = g_score[current] + movement_cost
                 
                 if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
@@ -356,7 +398,7 @@ class SegFormerNode(Node):
                 # Mark obstacles with inflation (optimized, within 1m)
                 import time
                 total_start = time.time()
-                obstacle_overlay, obstacle_time = self.mark_obstacles_with_inflation(mask)
+                obstacle_overlay, costmap, obstacle_time = self.mark_obstacles_with_inflation(mask)
                 
                 # Blend obstacle overlay with main overlay
                 obstacle_mask = np.any(obstacle_overlay > 0, axis=2)
@@ -403,8 +445,10 @@ class SegFormerNode(Node):
                         if goal_y < h - 1:
                             break
                     
-                    # Use A* or simple pathfinding to draw path on floor only
-                    path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y))
+                    # Use A* pathfinding with costmap for obstacle avoidance
+                    path_start_time = time.time()
+                    path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y), costmap)
+                    path_time = (time.time() - path_start_time) * 1000
                     
                     # Create smooth curvy path using spline interpolation
                     if len(path) > 2:
@@ -430,11 +474,11 @@ class SegFormerNode(Node):
                     total_time = (time.time() - total_start) * 1000
                     
                     # Display timing information on overlay
-                    timing_text = f"Obstacle: {obstacle_time:.1f}ms | Total: {total_time:.1f}ms"
+                    timing_text = f"Obstacle: {obstacle_time:.1f}ms | Path: {path_time:.1f}ms | Total: {total_time:.1f}ms"
                     cv2.putText(overlay, timing_text, (10, 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                     cv2.putText(overlay, timing_text, (10, 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 1)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
                     
                     centroid = Point()
                     centroid.x = float(cx)
