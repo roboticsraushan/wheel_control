@@ -84,6 +84,74 @@ class SegFormerNode(Node):
 
         self.get_logger().info(f'Floor class ids: {self.floor_ids}')
 
+    def find_floor_path(self, mask, start, end):
+        """
+        Find a path from start to end that stays on the floor (mask > 0).
+        Uses a simplified A* pathfinding algorithm.
+        """
+        import heapq
+        
+        h, w = mask.shape
+        start_x, start_y = start
+        end_x, end_y = end
+        
+        # If start or end is not on floor, return direct line
+        if mask[start_y, start_x] == 0 or mask[end_y, end_x] == 0:
+            return [start, end]
+        
+        # A* pathfinding
+        def heuristic(pos):
+            return abs(pos[0] - end_x) + abs(pos[1] - end_y)
+        
+        open_set = []
+        heapq.heappush(open_set, (0, start))
+        came_from = {}
+        g_score = {start: 0}
+        f_score = {start: heuristic(start)}
+        
+        # 8-directional movement
+        directions = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+        
+        max_iterations = 5000
+        iterations = 0
+        
+        while open_set and iterations < max_iterations:
+            iterations += 1
+            _, current = heapq.heappop(open_set)
+            
+            if current == end:
+                # Reconstruct path
+                path = [current]
+                while current in came_from:
+                    current = came_from[current]
+                    path.append(current)
+                path.reverse()
+                return path
+            
+            cx, cy = current
+            for dx, dy in directions:
+                nx, ny = cx + dx, cy + dy
+                
+                # Check bounds
+                if not (0 <= nx < w and 0 <= ny < h):
+                    continue
+                
+                # Only move on floor pixels
+                if mask[ny, nx] == 0:
+                    continue
+                
+                neighbor = (nx, ny)
+                tentative_g_score = g_score[current] + np.sqrt(dx**2 + dy**2)
+                
+                if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g_score
+                    f_score[neighbor] = tentative_g_score + heuristic(neighbor)
+                    heapq.heappush(open_set, (f_score[neighbor], neighbor))
+        
+        # If no path found, return direct line
+        return [start, end]
+
     def image_cb(self, msg: Image):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -116,15 +184,62 @@ class SegFormerNode(Node):
                 # Overlay
                 overlay = frame.copy()
                 overlay[mask > 0] = (0, 255, 0)
-                overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
-                overlay_msg.header = msg.header
-                self.overlay_pub.publish(overlay_msg)
-                self.seg_image_pub.publish(overlay_msg)
+                
                 # Centroid
                 M = cv2.moments(mask)
                 if M['m00'] > 0:
                     cx = int(M['m10'] / M['m00'])
                     cy = int(M['m01'] / M['m00'])
+                    
+                    # Draw path from bottom center to furthest floor point (top/far end)
+                    start_x = w // 2
+                    start_y = h - 1
+                    
+                    # Find the bottom-most floor pixel near the center (start point)
+                    search_width = 50
+                    for y in range(h - 1, -1, -1):
+                        for dx in range(-search_width, search_width + 1):
+                            x = start_x + dx
+                            if 0 <= x < w and mask[y, x] > 0:
+                                start_y = y
+                                start_x = x
+                                break
+                        if start_y < h - 1:
+                            break
+                    
+                    # Find the furthest floor point (smallest y, furthest from camera)
+                    # Search around the centroid x-coordinate
+                    goal_x = cx
+                    goal_y = h - 1  # default to bottom if not found
+                    search_width_goal = 100
+                    
+                    for y in range(0, h):
+                        for dx in range(-search_width_goal, search_width_goal + 1):
+                            x = cx + dx
+                            if 0 <= x < w and mask[y, x] > 0:
+                                goal_y = y
+                                goal_x = x
+                                break
+                        if goal_y < h - 1:
+                            break
+                    
+                    # Use A* or simple pathfinding to draw path on floor only
+                    path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y))
+                    
+                    # Draw the path on overlay
+                    if len(path) > 1:
+                        for i in range(len(path) - 1):
+                            cv2.line(overlay, path[i], path[i + 1], (255, 0, 0), 3)
+                    
+                    # Draw goal point (furthest floor point) - Red
+                    cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)
+                    
+                    # Draw centroid as reference - Magenta
+                    cv2.circle(overlay, (cx, cy), 8, (255, 0, 255), -1)
+                    
+                    # Draw start point - Yellow
+                    cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)
+                    
                     centroid = Point()
                     centroid.x = float(cx)
                     centroid.y = float(cy)
@@ -133,6 +248,11 @@ class SegFormerNode(Node):
                     self.navigable_pub.publish(Bool(data=True))
                 else:
                     self.navigable_pub.publish(Bool(data=False))
+                
+                overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
+                overlay_msg.header = msg.header
+                self.overlay_pub.publish(overlay_msg)
+                self.seg_image_pub.publish(overlay_msg)
                 # Confidence
                 conf = float(np.max(probs_up[self.floor_ids])) if self.floor_ids else 0.0
                 self.conf_pub.publish(Float32(data=conf))
