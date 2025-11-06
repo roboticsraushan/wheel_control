@@ -253,8 +253,30 @@ class SegFormerNode(Node):
                     f_score[neighbor] = tentative_g_score + heuristic(neighbor)
                     heapq.heappush(open_set, (f_score[neighbor], neighbor))
         
-        # If no path found, return direct line
-        return [start, end]
+        # If no path found, return empty list to indicate failure
+        return []
+    
+    def validate_path(self, path, costmap):
+        """
+        Validate that the path doesn't go through high-cost obstacles.
+        Returns True if path is safe, False if it crosses lethal zones.
+        """
+        if len(path) < 2:
+            return False
+        
+        if costmap is None:
+            return True
+        
+        h, w = costmap.shape
+        
+        # Check each point in the path
+        for x, y in path:
+            if 0 <= x < w and 0 <= y < h:
+                # Reject path if it goes through lethal zone (cost >= 254)
+                if costmap[y, x] >= 254:
+                    return False
+        
+        return True
     
     def create_smooth_path(self, path, mask):
         """
@@ -450,25 +472,33 @@ class SegFormerNode(Node):
                     path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y), costmap)
                     path_time = (time.time() - path_start_time) * 1000
                     
-                    # Create smooth curvy path using spline interpolation
-                    if len(path) > 2:
+                    # Validate path - only display if safe
+                    path_is_safe = self.validate_path(path, costmap)
+                    
+                    if path_is_safe and len(path) > 2:
+                        # Create smooth curvy path using spline interpolation
                         smooth_path = self.create_smooth_path(path, mask)
+                        
+                        # Draw the curvy path on overlay
+                        if len(smooth_path) > 1:
+                            for i in range(len(smooth_path) - 1):
+                                cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 3)
+                        
+                        # Draw goal point (furthest floor point) - Red
+                        cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)
+                        
+                        # Draw centroid as reference - Magenta
+                        cv2.circle(overlay, (cx, cy), 8, (255, 0, 255), -1)
+                        
+                        # Draw start point - Yellow
+                        cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)
                     else:
-                        smooth_path = path
-                    
-                    # Draw the curvy path on overlay
-                    if len(smooth_path) > 1:
-                        for i in range(len(smooth_path) - 1):
-                            cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 3)
-                    
-                    # Draw goal point (furthest floor point) - Red
-                    cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)
-                    
-                    # Draw centroid as reference - Magenta
-                    cv2.circle(overlay, (cx, cy), 8, (255, 0, 255), -1)
-                    
-                    # Draw start point - Yellow
-                    cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)
+                        # Path blocked - display warning
+                        warning_text = "PATH BLOCKED - No Safe Route"
+                        cv2.putText(overlay, warning_text, (10, 70), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
+                        cv2.putText(overlay, warning_text, (10, 70), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
                     
                     # Calculate total processing time
                     total_time = (time.time() - total_start) * 1000
