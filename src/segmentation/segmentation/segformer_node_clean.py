@@ -26,6 +26,8 @@ class SegFormerNode(Node):
         self.declare_parameter('morph_kernel', 5)
         self.declare_parameter('robot_footprint_size', 0.4)  # 40cm in meters
         self.declare_parameter('pixels_per_meter', 200.0)  # Approximate scaling factor
+        self.declare_parameter('obstacle_inflation_radius', 0.3)  # 30cm safety margin in meters
+        self.declare_parameter('cost_scaling_factor', 2.0)  # How much to penalize near-obstacle paths
 
         self.model_name = self.get_parameter('model_name').value
         self.local_model_dir = self.get_parameter('local_model_dir').value
@@ -35,6 +37,8 @@ class SegFormerNode(Node):
         self.morph_kernel = int(self.get_parameter('morph_kernel').value)
         self.robot_footprint_size = float(self.get_parameter('robot_footprint_size').value)
         self.pixels_per_meter = float(self.get_parameter('pixels_per_meter').value)
+        self.obstacle_inflation_radius = float(self.get_parameter('obstacle_inflation_radius').value)
+        self.cost_scaling_factor = float(self.get_parameter('cost_scaling_factor').value)
 
         self.bridge = CvBridge()
 
@@ -87,6 +91,60 @@ class SegFormerNode(Node):
                         pass
 
         self.get_logger().info(f'Floor class ids: {self.floor_ids}')
+
+    def mark_obstacles_with_inflation(self, floor_mask):
+        """
+        Mark obstacles (non-floor) with red color and inflation zone.
+        Only processes within 1 meter range for performance.
+        Returns: (overlay_mask, elapsed_time_ms)
+        """
+        import time
+        start_time = time.time()
+        
+        h, w = floor_mask.shape
+        
+        # Convert 1 meter to pixels
+        one_meter_pixels = int(1.0 * self.pixels_per_meter)
+        
+        # Only process bottom portion (within 1 meter from camera)
+        process_height = min(one_meter_pixels, h)
+        
+        # Create colored overlay
+        obstacle_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        
+        # Process only the bottom region
+        process_region = floor_mask[h - process_height:h, :]
+        
+        # Calculate distance transform for inflation
+        dist_transform = cv2.distanceTransform(process_region, cv2.DIST_L2, 5)
+        
+        # Convert inflation radius to pixels
+        inflation_radius_pixels = int(self.obstacle_inflation_radius * self.pixels_per_meter)
+        
+        # Create masks
+        obstacle_mask = process_region == 0
+        inflation_mask = (dist_transform > 0) & (dist_transform <= inflation_radius_pixels)
+        
+        # Mark obstacles in red
+        region_overlay = np.zeros((process_height, w, 3), dtype=np.uint8)
+        region_overlay[obstacle_mask] = (0, 0, 255)  # Red for obstacles
+        
+        # Mark inflation zone with orange/yellow gradient
+        if np.any(inflation_mask):
+            # Gradient from red to yellow based on distance
+            distances = dist_transform[inflation_mask]
+            ratios = distances / inflation_radius_pixels
+            # Orange to yellow gradient
+            region_overlay[inflation_mask, 0] = (255 * ratios).astype(np.uint8)  # Blue channel
+            region_overlay[inflation_mask, 1] = (165 + 90 * ratios).astype(np.uint8)  # Green channel
+            region_overlay[inflation_mask, 2] = 255  # Red channel (full)
+        
+        # Copy to full image
+        obstacle_overlay[h - process_height:h, :] = region_overlay
+        
+        elapsed_time = (time.time() - start_time) * 1000  # Convert to ms
+        
+        return obstacle_overlay, elapsed_time
 
     def find_floor_path(self, mask, start, end):
         """
@@ -295,6 +353,18 @@ class SegFormerNode(Node):
                 overlay = frame.copy()
                 overlay[mask > 0] = (0, 255, 0)
                 
+                # Mark obstacles with inflation (optimized, within 1m)
+                import time
+                total_start = time.time()
+                obstacle_overlay, obstacle_time = self.mark_obstacles_with_inflation(mask)
+                
+                # Blend obstacle overlay with main overlay
+                obstacle_mask = np.any(obstacle_overlay > 0, axis=2)
+                overlay[obstacle_mask] = cv2.addWeighted(
+                    overlay[obstacle_mask], 0.3, 
+                    obstacle_overlay[obstacle_mask], 0.7, 0
+                )
+                
                 # Centroid
                 M = cv2.moments(mask)
                 if M['m00'] > 0:
@@ -355,6 +425,16 @@ class SegFormerNode(Node):
                     
                     # Draw start point - Yellow
                     cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)
+                    
+                    # Calculate total processing time
+                    total_time = (time.time() - total_start) * 1000
+                    
+                    # Display timing information on overlay
+                    timing_text = f"Obstacle: {obstacle_time:.1f}ms | Total: {total_time:.1f}ms"
+                    cv2.putText(overlay, timing_text, (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.putText(overlay, timing_text, (10, 30), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 1)
                     
                     centroid = Point()
                     centroid.x = float(cx)
