@@ -24,6 +24,8 @@ class SegFormerNode(Node):
         self.declare_parameter('prob_threshold', 0.5)
         self.declare_parameter('min_area', 5000)
         self.declare_parameter('morph_kernel', 5)
+        self.declare_parameter('robot_footprint_size', 0.4)  # 40cm in meters
+        self.declare_parameter('pixels_per_meter', 200.0)  # Approximate scaling factor
 
         self.model_name = self.get_parameter('model_name').value
         self.local_model_dir = self.get_parameter('local_model_dir').value
@@ -31,6 +33,8 @@ class SegFormerNode(Node):
         self.prob_threshold = float(self.get_parameter('prob_threshold').value)
         self.min_area = int(self.get_parameter('min_area').value)
         self.morph_kernel = int(self.get_parameter('morph_kernel').value)
+        self.robot_footprint_size = float(self.get_parameter('robot_footprint_size').value)
+        self.pixels_per_meter = float(self.get_parameter('pixels_per_meter').value)
 
         self.bridge = CvBridge()
 
@@ -151,6 +155,112 @@ class SegFormerNode(Node):
         
         # If no path found, return direct line
         return [start, end]
+    
+    def create_smooth_path(self, path, mask):
+        """
+        Create a smooth curvy path using cubic spline interpolation.
+        Ensures the smoothed path still stays on floor pixels.
+        """
+        from scipy.interpolate import splprep, splev
+        
+        if len(path) < 3:
+            return path
+        
+        # Convert path to numpy arrays
+        path_array = np.array(path)
+        x = path_array[:, 0].astype(float)
+        y = path_array[:, 1].astype(float)
+        
+        # Downsample path for smoother curves (take every nth point)
+        step = max(1, len(path) // 8)
+        x_sampled = x[::step]
+        y_sampled = y[::step]
+        
+        # Ensure start and end points are included
+        if len(x_sampled) > 0 and x_sampled[-1] != x[-1]:
+            x_sampled = np.append(x_sampled, x[-1])
+            y_sampled = np.append(y_sampled, y[-1])
+        
+        if len(x_sampled) < 3:
+            return path
+        
+        try:
+            # Create cubic B-spline
+            tck, u = splprep([x_sampled, y_sampled], s=len(x_sampled) * 10, k=min(3, len(x_sampled) - 1))
+            
+            # Generate smooth curve with many points
+            u_fine = np.linspace(0, 1, len(path) * 2)
+            x_smooth, y_smooth = splev(u_fine, tck)
+            
+            # Filter out points that are not on floor
+            smooth_path = []
+            h, w = mask.shape
+            for i in range(len(x_smooth)):
+                px, py = int(round(x_smooth[i])), int(round(y_smooth[i]))
+                if 0 <= px < w and 0 <= py < h and mask[py, px] > 0:
+                    smooth_path.append((px, py))
+            
+            # Remove consecutive duplicates
+            if len(smooth_path) > 1:
+                filtered_path = [smooth_path[0]]
+                for point in smooth_path[1:]:
+                    if point != filtered_path[-1]:
+                        filtered_path.append(point)
+                return filtered_path if len(filtered_path) > 1 else path
+            
+            return path if len(smooth_path) < 2 else smooth_path
+            
+        except Exception as e:
+            # If spline fails, return original path
+            return path
+    
+    def draw_robot_footprint(self, overlay, path, mask):
+        """
+        Draw robot footprint (40cm x 40cm) along the path.
+        The footprint size scales with distance from camera (y-coordinate).
+        """
+        if len(path) < 2:
+            return
+        
+        h, w = mask.shape
+        
+        # Draw footprints at regular intervals along the path
+        num_footprints = min(8, len(path) // 20 + 1)
+        indices = np.linspace(0, len(path) - 1, num_footprints, dtype=int)
+        
+        for idx in indices:
+            x, y = path[idx]
+            
+            # Scale footprint based on y-coordinate (perspective)
+            # Objects further away (smaller y) appear smaller
+            scale_factor = 1.0 + (h - y) / h * 0.5  # Scale from 1.0 to 1.5
+            
+            # Calculate footprint size in pixels
+            footprint_pixels = int(self.robot_footprint_size * self.pixels_per_meter / scale_factor)
+            half_size = footprint_pixels // 2
+            
+            # Draw square footprint
+            pt1 = (x - half_size, y - half_size)
+            pt2 = (x + half_size, y + half_size)
+            
+            # Draw filled semi-transparent rectangle
+            overlay_copy = overlay.copy()
+            cv2.rectangle(overlay_copy, pt1, pt2, (0, 255, 255), -1)  # Cyan filled
+            cv2.addWeighted(overlay_copy, 0.3, overlay, 0.7, 0, overlay)
+            
+            # Draw border
+            cv2.rectangle(overlay, pt1, pt2, (0, 200, 200), 2)  # Darker cyan border
+            
+            # Draw direction indicator (small arrow/line showing orientation)
+            if idx < len(path) - 1:
+                next_x, next_y = path[min(idx + 5, len(path) - 1)]
+                dx = next_x - x
+                dy = next_y - y
+                length = np.sqrt(dx**2 + dy**2)
+                if length > 0:
+                    dx, dy = dx / length, dy / length
+                    arrow_end = (int(x + dx * half_size * 0.7), int(y + dy * half_size * 0.7))
+                    cv2.arrowedLine(overlay, (x, y), arrow_end, (255, 255, 255), 2, tipLength=0.4)
 
     def image_cb(self, msg: Image):
         try:
@@ -226,10 +336,16 @@ class SegFormerNode(Node):
                     # Use A* or simple pathfinding to draw path on floor only
                     path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y))
                     
-                    # Draw the path on overlay
-                    if len(path) > 1:
-                        for i in range(len(path) - 1):
-                            cv2.line(overlay, path[i], path[i + 1], (255, 0, 0), 3)
+                    # Create smooth curvy path using spline interpolation
+                    if len(path) > 2:
+                        smooth_path = self.create_smooth_path(path, mask)
+                    else:
+                        smooth_path = path
+                    
+                    # Draw the curvy path on overlay
+                    if len(smooth_path) > 1:
+                        for i in range(len(smooth_path) - 1):
+                            cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 3)
                     
                     # Draw goal point (furthest floor point) - Red
                     cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)
