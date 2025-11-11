@@ -53,6 +53,11 @@ setup(
             'voice_command = realsense_nav.training.voice_command_node:main',
             # Navigation utilities
             'simple_odometry = realsense_nav.navigation.simple_odometry:main',
+            # IMU Odometry
+            'imu_odometry_node = realsense_nav.imu_odometry_node:main',
+            'imu_odometry_madgwick = realsense_nav.imu_odometry_madgwick:main',
+            # Path publisher from odometry
+            'path_from_odom = realsense_nav.path_from_odom:main',
             # Visualization
             'semantic_visualizer_node = realsense_nav.visualization.semantic_visualizer_node:main',
         ],

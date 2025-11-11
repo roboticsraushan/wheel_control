@@ -6,6 +6,11 @@ realsense:
   rgb_profile: '1280x720x30'
   depth_profile: '848x480x30'
   align_depth: true
+  # IMU options: set to true if your camera has an IMU (e.g., D435i) and you want to publish IMU data
+  # Set these to true to always enable IMU streams from the camera driver
+  enable_imu: true
+  enable_gyro: true
+  enable_accel: true
 
 motors:
   serial_port: '/dev/ttyACM0'

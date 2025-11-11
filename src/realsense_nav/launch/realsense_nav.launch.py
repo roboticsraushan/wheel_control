@@ -75,9 +75,12 @@ def generate_launch_description():
             'enable_color': 'true' if rs_cfg.get('enable_color', True) else 'false',
             'enable_depth': 'true' if rs_cfg.get('enable_depth', True) else 'false',
             'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
+            # IMU / inertial options (forward from hardware.yaml if present)
+            'enable_imu': 'true',
+            'enable_gyro': 'true',
+            'enable_accel': 'true',
             'enable_infra1': 'false',
             'enable_infra2': 'false',
-            'serial_no': str(rs_cfg.get('serial', '')),
         }.items()
     )
     

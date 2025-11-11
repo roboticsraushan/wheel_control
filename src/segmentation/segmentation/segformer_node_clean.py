@@ -451,38 +451,81 @@ class SegFormerNode(Node):
                         if start_y < h - 1:
                             break
                     
-                    # Find the furthest floor point (smallest y, furthest from camera)
-                    # Search around the centroid x-coordinate
+                    # Use the centroid as the goal point (prefer centroid if it's on the floor).
+                    # If centroid pixel isn't on the floor, search nearby for the nearest floor pixel.
                     goal_x = cx
-                    goal_y = h - 1  # default to bottom if not found
-                    search_width_goal = 100
-                    
-                    for y in range(0, h):
-                        for dx in range(-search_width_goal, search_width_goal + 1):
-                            x = cx + dx
-                            if 0 <= x < w and mask[y, x] > 0:
-                                goal_y = y
-                                goal_x = x
+                    goal_y = cy
+                    search_radius = 100
+
+                    if not (0 <= goal_x < w and 0 <= goal_y < h and mask[goal_y, goal_x] > 0):
+                        found = False
+                        # Expand search in rings around the centroid
+                        for r in range(1, search_radius + 1):
+                            # Top/bottom edges of the ring
+                            for dx in range(-r, r + 1):
+                                for dy in ( -r, r ):
+                                    x = cx + dx
+                                    y = cy + dy
+                                    if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
+                                        goal_x = x
+                                        goal_y = y
+                                        found = True
+                                        break
+                                if found:
+                                    break
+                            if found:
                                 break
-                        if goal_y < h - 1:
-                            break
+
+                            # Left/right edges of the ring (excluding corners already checked)
+                            for dy in range(-r + 1, r):
+                                for dx in ( -r, r ):
+                                    x = cx + dx
+                                    y = cy + dy
+                                    if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
+                                        goal_x = x
+                                        goal_y = y
+                                        found = True
+                                        break
+                                if found:
+                                    break
+                            if found:
+                                break
+
+                        # Fallback: if no nearby floor found, revert to searching for a far/furthest floor point
+                        if not found:
+                            goal_x = cx
+                            goal_y = h - 1  # default to bottom if not found
+                            search_width_goal = 100
+                            for y in range(0, h):
+                                for dx in range(-search_width_goal, search_width_goal + 1):
+                                    x = cx + dx
+                                    if 0 <= x < w and mask[y, x] > 0:
+                                        goal_y = y
+                                        goal_x = x
+                                        break
+                                if goal_y < h - 1:
+                                    break
                     
                     # Use A* pathfinding with costmap for obstacle avoidance
                     path_start_time = time.time()
-                    path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y), costmap)
+                    # Temporarily disable costmap penalties — pass None so A* does not use costmap
+                    # (will re-enable costmap later)
+                    path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y), None)
                     path_time = (time.time() - path_start_time) * 1000
                     
-                    # Validate path - only display if safe
-                    path_is_safe = self.validate_path(path, costmap)
+                    # Validate path - only display if safe (costmap disabled, so pass None)
+                    path_is_safe = self.validate_path(path, None)
                     
                     if path_is_safe and len(path) > 2:
                         # Create smooth curvy path using spline interpolation
                         smooth_path = self.create_smooth_path(path, mask)
                         
-                        # Draw the curvy path on overlay
+                        # Draw the curvy path on overlay (thicker for better visibility)
                         if len(smooth_path) > 1:
                             for i in range(len(smooth_path) - 1):
-                                cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 3)
+                                # Draw a thicker blue path with a thin white outline for contrast
+                                cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0,0), 8)
+                                cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 30)
                         
                         # Draw goal point (furthest floor point) - Red
                         cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)
@@ -511,8 +554,8 @@ class SegFormerNode(Node):
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
                     
                     centroid = Point()
-                    centroid.x = float(cx)
-                    centroid.y = float(cy)
+                    centroid.x = float(cx+1.0)
+                    centroid.y = float(cy+1.0)
                     centroid.z = 0.0
                     self.centroid_pub.publish(centroid)
                     self.navigable_pub.publish(Bool(data=True))
