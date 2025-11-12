@@ -64,7 +64,7 @@ def generate_launch_description():
             'enable_imu': 'true' if rs_cfg.get('enable_imu', True) else 'false',
             'enable_gyro': 'true' if rs_cfg.get('enable_gyro', True) else 'false',
             'enable_accel': 'true' if rs_cfg.get('enable_accel', True) else 'false',
-            'rgb_camera.profile': rs_cfg.get('rgb_profile', '1280x720x30'),
+            'rgb_camera.profile': rs_cfg.get('rgb_profile', '640x360x30'),
             'depth_module.profile': rs_cfg.get('depth_profile', '848x480x30'),
             # Infrared resolution for stereo VO (match run_stereo.py: 640x360x30)
             'infra_rgb': 'false',  # Keep infrared as grayscale (Y8 format)
@@ -101,7 +101,8 @@ def generate_launch_description():
             'track_dist_px': 80.0,
             'max_lost_s': 1.0,
         }],
-        output='screen'
+        # Switch to 'log' to avoid noisy stdout/stderr (model prints) flooding the terminal.
+        output='log'
     )
     
     # Junction manager node
@@ -139,7 +140,8 @@ def generate_launch_description():
             'language': 'en-US',
             'energy_threshold': 4000,
         }],
-        output='screen'
+        # ALSA and audio library errors are written to stderr; keep them out of the console.
+        output='log'
     )
     
     # Simple odometry (pose estimation)
@@ -210,6 +212,19 @@ def generate_launch_description():
             ],
         output='screen'
     )
+    
+    # Initial-pose handler: allow RViz 2D Pose Estimate to set map->odom
+    initial_pose_script = os.path.join(
+        os.path.abspath(os.path.join(realsense_nav_dir, '..', '..')), 'install', 'realsense_nav', 'lib', 'realsense_nav', 'initial_pose_to_map_odom.py'
+    )
+    if not os.path.exists(initial_pose_script):
+        # fallback to workspace script
+        initial_pose_script = os.path.join(os.getcwd(), 'src', 'realsense_nav', 'nodes', 'initial_pose_to_map_odom.py')
+
+    initial_pose_process = ExecuteProcess(
+        cmd=['/usr/bin/env', 'python3', initial_pose_script],
+        output='screen'
+    )
    
     # Semantic visualizer node
     semantic_visualizer_node = Node(
@@ -226,17 +241,31 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Static transform publisher: publish transform from base_link -> camera_link
+    # Default is identity (camera coincident with base_link). Adjust arguments
+    # below if you need a different translation/rotation.
+    static_tf_node = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_transform_camera_to_base',
+        # arguments: x y z qx qy qz qw frame_id child_frame_id
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'base_link', 'camera_link'],
+        output='screen'
+    )
+
     return LaunchDescription([
         realsense_launch,
-        yolo_detector_node,
-        scene_graph_node,
-        junction_manager_node,
-        scene_graph_recorder_node,
-        voice_command_node,
-        odometry_node,
-        segformer_node,
-        floorplan_manager_process,
+        # yolo_detector_node,
+        # scene_graph_node,
+        # junction_manager_node,
+        # scene_graph_recorder_node,
+        # voice_command_node,
+        # odometry_node,
+        # segformer_node,
+        # floorplan_manager_process,
         map_loader_process,
-        view_world_node,
-        semantic_visualizer_node,
+        initial_pose_process,
+        # view_world_node,
+        # semantic_visualizer_node,
+        static_tf_node,
     ])

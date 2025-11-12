@@ -62,25 +62,37 @@ def generate_launch_description():
         hw_cfg = {}
 
     rs_cfg = hw_cfg.get('realsense', {})
+    # RealSense expects serial_no as an integer (not a quoted string in launch args)
+    default_serial = str(rs_cfg.get('serial', ''))
 
+    # Get package directory for realsense2_camera
+    realsense2_camera_dir = get_package_share_directory('realsense2_camera')
+    # RealSense camera launch
+    # Note: Passing serial_no as a LaunchConfiguration causes a type error in RealSense
+    # (it expects integer type, but launch passes strings).
+    # Solution: Let RealSense enumerate and pick the first available device.
+    # If you have multiple cameras, use usb_port_id instead.
     realsense_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare('realsense2_camera'),
-                'launch',
-                'rs_launch.py'
-            ])
-        ]),
+        PythonLaunchDescriptionSource(
+            os.path.join(realsense2_camera_dir, 'launch', 'rs_launch.py')
+        ),
         launch_arguments={
             'enable_color': 'true' if rs_cfg.get('enable_color', True) else 'false',
             'enable_depth': 'true' if rs_cfg.get('enable_depth', True) else 'false',
+            # Enable infrared streams for stereo visual odometry
+            'enable_infra1': 'true',
+            'enable_infra2': 'true',
+            # Forward IMU / inertial options from hardware config (default to true)
+            'enable_imu': 'true' if rs_cfg.get('enable_imu', True) else 'false',
+            'enable_gyro': 'true' if rs_cfg.get('enable_gyro', True) else 'false',
+            'enable_accel': 'true' if rs_cfg.get('enable_accel', True) else 'false',
+            'rgb_camera.profile': rs_cfg.get('rgb_profile', '1280x720x30'),
+            'depth_module.profile': rs_cfg.get('depth_profile', '848x480x30'),
+            # Infrared resolution for stereo VO (match run_stereo.py: 640x360x30)
+            'infra_rgb': 'false',  # Keep infrared as grayscale (Y8 format)
             'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
-            # IMU / inertial options (forward from hardware.yaml if present)
-            'enable_imu': 'true',
-            'enable_gyro': 'true',
-            'enable_accel': 'true',
-            'enable_infra1': 'false',
-            'enable_infra2': 'false',
+            # Disable IR emitter for better stereo tracking (infrared pattern interferes with VO)
+            'enable_ir_emitter': 'true',
         }.items()
     )
     
