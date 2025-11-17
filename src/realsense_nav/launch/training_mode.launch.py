@@ -265,16 +265,22 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Static transform: camera_link -> base_link
-    # This publisher uses roll/pitch/yaw for rotation. If you have a
-    # quaternion, convert to RPY (e.g. using `tf_transformations.euler_from_quaternion`).
+    # Static transform: base_link -> camera_link
+    # This defines where the camera is mounted on the robot.
+    # Visual odometry now publishes odom->base_link, and this static transform
+    # completes the chain: map -> odom -> base_link -> camera_link
+    # 
+    # Camera mounting position relative to base_link:
+    #   Translation: (0.15, 0, 0.30) in base_link frame (camera is 15cm forward, 30cm up)
+    #   Rotation: roll=+pi/2, pitch=0, yaw=+pi/2 (base_link -> camera optical frame)
+    # 
+    # This is the INVERSE of the camera_link->base_link transform we used before.
     static_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='static_transform_camera_to_base',
-    # arguments: --x X --y Y --z Z --roll R --pitch P --yaw Y --frame-id FRAME --child-frame-id CHILD
-    # Use roll=-pi/2, pitch=0, yaw=-pi/2 to rotate camera optical -> base_link
-    arguments=['--x', '-0.15', '--y', '0.0', '--z', '-0.30', '--roll', '0.0', '--pitch', '0.0', '--yaw', '0.0', '--frame-id', 'camera_link', '--child-frame-id', 'base_link'],
+        name='static_transform_base_to_camera',
+        # arguments: --x X --y Y --z Z --roll R --pitch P --yaw Y --frame-id FRAME --child-frame-id CHILD
+        arguments=['--x', '0.15', '--y', '0.0', '--z', '0.30', '--roll', '1.57079632679', '--pitch', '0.0', '--yaw', '1.57079632679', '--frame-id', 'base_link', '--child-frame-id', 'camera_link'],
         output='screen'
     )
 
