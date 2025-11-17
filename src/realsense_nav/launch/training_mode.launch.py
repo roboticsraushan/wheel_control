@@ -73,8 +73,13 @@ def generate_launch_description():
             # Infrared resolution for stereo VO (match run_stereo.py: 640x360x30)
             'infra_rgb': 'false',  # Keep infrared as grayscale (Y8 format)
             'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
-            # Disable IR emitter for better stereo tracking (infrared pattern interferes with VO)
-            'enable_ir_emitter': 'false',
+            # Disable IR emitter for better stereo tracking (infrared pattern interferes with VO).
+            # Driver exposes emitter settings under `depth_module.*`; set them here so
+            # training mode boots with the IR emitter off by default.
+            'depth_module.emitter_enabled': '0',
+            'depth_module.emitter_always_on': '0',
+            # Some versions use an on/off toggle; include this for compatibility.
+            'depth_module.emitter_on_off': '0',
             # Prefer device timestamps to keep frames synchronized (if driver supports it)
             'enable_device_time': 'true' if rs_cfg.get('enable_device_time', True) else 'false',
             # RealSense driver exposed params to force use of device timestamp
