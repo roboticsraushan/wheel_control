@@ -11,6 +11,10 @@ realsense:
   enable_imu: true
   enable_gyro: true
   enable_accel: true
+  enable_device_time: true
+  # RealSense depth filters to apply (comma-separated). Options include:
+  # spatial, temporal, hole_filling, decimation, disparity
+  rs_filters: 'spatial,temporal,hole_filling' 
 
 motors:
   serial_port: '/dev/ttyACM0'

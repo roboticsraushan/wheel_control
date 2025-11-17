@@ -92,7 +92,7 @@ def generate_launch_description():
             'infra_rgb': 'false',  # Keep infrared as grayscale (Y8 format)
             'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
             # Disable IR emitter for better stereo tracking (infrared pattern interferes with VO)
-            'enable_ir_emitter': 'true',
+            'enable_ir_emitter': 'false',
         }.items()
     )
     

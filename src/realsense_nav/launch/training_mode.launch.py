@@ -75,6 +75,13 @@ def generate_launch_description():
             'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
             # Disable IR emitter for better stereo tracking (infrared pattern interferes with VO)
             'enable_ir_emitter': 'false',
+            # Prefer device timestamps to keep frames synchronized (if driver supports it)
+            'enable_device_time': 'true' if rs_cfg.get('enable_device_time', True) else 'false',
+            # RealSense driver exposed params to force use of device timestamp
+            # for each sensor submodule. Keep them on to improve stereo sync.
+            'depth_module.global_time_enabled': 'true' if rs_cfg.get('enable_device_time', True) else 'false',
+            'rgb_camera.global_time_enabled': 'true' if rs_cfg.get('enable_device_time', True) else 'false',
+            'motion_module.global_time_enabled': 'true' if rs_cfg.get('enable_device_time', True) else 'false',
         }.items()
     )
     
