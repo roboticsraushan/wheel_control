@@ -18,7 +18,7 @@ Then:
 """
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -265,15 +265,16 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Static transform publisher: publish transform from base_link -> camera_link
-    # Default is identity (camera coincident with base_link). Adjust arguments
-    # below if you need a different translation/rotation.
+    # Static transform: camera_link -> base_link
+    # This publisher uses roll/pitch/yaw for rotation. If you have a
+    # quaternion, convert to RPY (e.g. using `tf_transformations.euler_from_quaternion`).
     static_tf_node = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_transform_camera_to_base',
-        # arguments: x y z qx qy qz qw frame_id child_frame_id
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'base_link', 'camera_link'],
+    # arguments: --x X --y Y --z Z --roll R --pitch P --yaw Y --frame-id FRAME --child-frame-id CHILD
+    # Use roll=-pi/2, pitch=0, yaw=-pi/2 to rotate camera optical -> base_link
+    arguments=['--x', '-0.15', '--y', '0.0', '--z', '-0.30', '--roll', '0.0', '--pitch', '0.0', '--yaw', '0.0', '--frame-id', 'camera_link', '--child-frame-id', 'base_link'],
         output='screen'
     )
 
@@ -301,4 +302,16 @@ def generate_launch_description():
         view_world_node,
         # semantic_visualizer_node,
         static_tf_node,
+        # Ensure the RealSense IR emitter is disabled after the camera node has started.
+        # This matches the parameter we pass into the camera launch above but is a
+        # second attempt run after everything else has launched (helps on slower
+        # startup systems where the device node is not yet fully up when the
+        # rs_launch receives arguments).
+        TimerAction(
+            period=6.0,
+            actions=[ExecuteProcess(
+                cmd=['/usr/bin/env', 'ros2', 'param', 'set', '/camera/camera', 'depth_module.emitter_enabled', '0'],
+                output='screen'
+            )]
+        ),
     ])
