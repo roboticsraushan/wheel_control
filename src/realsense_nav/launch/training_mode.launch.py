@@ -15,6 +15,8 @@ Then:
     - Drive robot manually to junction
     - Say "record junction" or call service:
       ros2 service call /junction_manager/record_junction realsense_nav/srv/RecordJunction "{junction_name: 'kitchen'}"
+      notes
+      ros2 topic pub /scene_graph/trigger std_msgs/msg/String "{data: 'snapshot'}" --once
 """
 
 from launch import LaunchDescription
