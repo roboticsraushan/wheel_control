@@ -280,7 +280,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='static_transform_base_to_camera',
         # arguments: --x X --y Y --z Z --roll R --pitch P --yaw Y --frame-id FRAME --child-frame-id CHILD
-        arguments=['--x', '0.15', '--y', '0.0', '--z', '0.30', '--roll', '1.57079632679', '--pitch', '0.0', '--yaw', '1.57079632679', '--frame-id', 'base_link', '--child-frame-id', 'camera_link'],
+        arguments=['--x', '0.15', '--y', '0.0', '--z', '0.80', '--roll', '-1.570796326790', '--pitch', '0.0', '--yaw', '-1.57079632679', '--frame-id', 'base_link', '--child-frame-id', 'camera_link'],
         output='screen'
     )
 
