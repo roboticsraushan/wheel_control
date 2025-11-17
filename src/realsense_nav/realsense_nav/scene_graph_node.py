@@ -6,12 +6,14 @@ Subscribes to color, depth and segmentation mask and publishes a compact
 scene graph on /scene_graph (std_msgs/String with JSON). Objects are
 extracted from connected components in the mask (simple, fast) and a
 per-object image centroid + depth is provided.
+raushan : ros2 topic pub /scene_graph/trigger std_msgs/msg/String "{data: 'snapshot'}" --once
 """
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 from cv_bridge import CvBridge
+from realsense_nav.yolo_detector_node import YOLODetector
 import cv2
 import numpy as np
 import json
@@ -42,7 +44,20 @@ class SceneGraphNode(Node):
         self.latest_mask = None
 
         self.create_subscription(Image, '/camera/camera/color/image_raw', self.color_cb, 2)
-        self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self.depth_cb, 2)
+        # Depth config: allow using aligned depth to match color image
+        self.declare_parameter('use_aligned_depth', True)
+        self.declare_parameter('depth_topic', '/camera/camera/depth/image_rect_raw')
+        self.declare_parameter('depth_roi_radius', 2)
+
+        self.use_aligned_depth = bool(self.get_parameter('use_aligned_depth').value)
+        self.depth_topic = self.get_parameter('depth_topic').value
+        self.depth_roi_radius = int(self.get_parameter('depth_roi_radius').value)
+        if self.use_aligned_depth:
+            aligned = '/camera/camera/aligned_depth_to_color/image_raw'
+            self.depth_topic = aligned if self.depth_topic == '/camera/camera/depth/image_rect_raw' else self.depth_topic
+
+        self.get_logger().info(f'scene_graph subscribing to depth topic: {self.depth_topic} (aligned={self.use_aligned_depth})')
+        self.create_subscription(Image, self.depth_topic, self.depth_cb, 2)
         self.create_subscription(Image, '/segmentation/image', self.mask_cb, 2)
 
         self.sg_pub = self.create_publisher(String, '/scene_graph', 10)
@@ -95,13 +110,23 @@ class SceneGraphNode(Node):
                 # assume detections already contain id, bbox, centroid_px, depth_m
                 for o in self.latest_detections:
                     # canonicalize minimal fields
+                    # If depth_m is missing from the continuous detector, try
+                    # to estimate it from the (aligned) depth image.
+                    depth_m = o.get('depth_m')
+                    if depth_m is None and self.latest_depth is not None and o.get('centroid_px'):
+                        try:
+                            cx, cy = [int(v) for v in o.get('centroid_px')]
+                            depth_m = YOLODetector.median_depth_from_array(self.latest_depth, cx, cy, radius=self.depth_roi_radius)
+                        except Exception:
+                            depth_m = None
+
                     obj = {
                         'id': int(o.get('id', 0)),
                         'label': o.get('label'),
                         'conf': float(o.get('conf')) if o.get('conf') is not None else None,
                         'bbox': [int(v) for v in o.get('bbox', [])],
                         'centroid_px': [int(v) for v in o.get('centroid_px', [])] if o.get('centroid_px') else None,
-                        'depth_m': o.get('depth_m'),
+                        'depth_m': depth_m,
                     }
                     objects.append(obj)
             except Exception as e:
@@ -119,11 +144,8 @@ class SceneGraphNode(Node):
                 if self.latest_depth is not None:
                     h_d, w_d = self.latest_depth.shape[:2]
                     if 0 <= cy < h_d and 0 <= cx < w_d:
-                        z = float(self.latest_depth[cy, cx])
-                        if z > 10:
-                            depth_m = z / 1000.0
-                        else:
-                            depth_m = z
+                                # Use median in ROI and ignore zero/NaN values
+                                depth_m = YOLODetector.median_depth_from_array(self.latest_depth, cx, cy, radius=self.depth_roi_radius)
 
                 obj = {
                     'id': int(i),

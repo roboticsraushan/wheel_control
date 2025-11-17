@@ -20,6 +20,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
+import numpy as np
 
 
 class YOLODetector(Node):
@@ -32,6 +33,10 @@ class YOLODetector(Node):
         self.declare_parameter('min_interval_s', 0.15)
         self.declare_parameter('track_dist_px', 80.0)
         self.declare_parameter('max_lost_s', 1.0)
+        # Depth/ROI configuration
+        self.declare_parameter('use_aligned_depth', True)
+        self.declare_parameter('depth_topic', '/camera/camera/depth/image_rect_raw')
+        self.declare_parameter('depth_roi_radius', 2)
 
         self.model_name = self.get_parameter('yolo_model').value
         self.yolo_conf = float(self.get_parameter('yolo_conf').value)
@@ -55,7 +60,19 @@ class YOLODetector(Node):
 
         # subs
         self.create_subscription(Image, '/camera/camera/color/image_raw', self.color_cb, 2)
-        self.create_subscription(Image, '/camera/camera/depth/image_rect_raw', self.depth_cb, 2)
+        # Prefer aligned depth if requested
+        self.use_aligned_depth = bool(self.get_parameter('use_aligned_depth').value)
+        self.depth_topic = self.get_parameter('depth_topic').value
+        self.depth_roi_radius = int(self.get_parameter('depth_roi_radius').value)
+
+        if self.use_aligned_depth:
+            # typical aligned depth topic created by the RealSense driver
+            aligned = '/camera/camera/aligned_depth_to_color/image_raw'
+            # allow override via parameter
+            self.depth_topic = aligned if self.depth_topic == '/camera/camera/depth/image_rect_raw' else self.depth_topic
+
+        self.get_logger().info(f'yolo_detector subscribing to depth topic: {self.depth_topic} (aligned={self.use_aligned_depth})')
+        self.create_subscription(Image, self.depth_topic, self.depth_cb, 2)
         self.create_subscription(CameraInfo, '/camera/camera/color/camera_info', self.camera_info_cb, 10)
 
         # Attempt to load YOLO model
@@ -121,13 +138,7 @@ class YOLODetector(Node):
 
                     depth_m = None
                     if self.latest_depth is not None:
-                        h_d, w_d = self.latest_depth.shape[:2]
-                        if 0 <= cy < h_d and 0 <= cx < w_d:
-                            z = float(self.latest_depth[cy, cx])
-                            if z > 10:
-                                depth_m = z / 1000.0
-                            else:
-                                depth_m = z
+                        depth_m = self._get_depth_meters(cx, cy)
 
                     world_xyz = None
                     if depth_m is not None and self.camera_info is not None:
@@ -203,6 +214,94 @@ class YOLODetector(Node):
             self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
         except Exception:
             pass
+
+    def _get_depth_meters(self, cx, cy):
+        """
+        Extract a depth estimate in meters at pixel (cx, cy) by taking a small
+        ROI (radius `depth_roi_radius`) around the centroid, filtering out
+        zero/NaN values, and returning the median. Handles images returned
+        either in millimeters (uint16) or meters (float32).
+        """
+        try:
+            depth = self.latest_depth
+            if depth is None:
+                return None
+            h, w = depth.shape[:2]
+            if not (0 <= cy < h and 0 <= cx < w):
+                return None
+
+            r = max(0, int(self.depth_roi_radius))
+            x1 = max(0, cx - r)
+            x2 = min(w, cx + r + 1)
+            y1 = max(0, cy - r)
+            y2 = min(h, cy + r + 1)
+
+            patch = np.array(depth[y1:y2, x1:x2]).flatten().astype(np.float64)
+            if patch.size == 0:
+                return None
+
+            # Filter invalid values
+            if np.issubdtype(patch.dtype, np.floating):
+                valid = patch[np.isfinite(patch) & (patch > 0.0)]
+            else:
+                # integers: 0 indicates no depth, regular values in mm
+                valid = patch[patch > 0]
+
+            if valid.size == 0:
+                return None
+
+            # Use the median to reduce spurious pixels
+            med = float(np.median(valid))
+            # Many depth sensors provide mm as uint16. If the median is > 10,
+            # assume mm and scale to meters. Otherwise it is likely meters.
+            if med > 10.0:
+                med = med / 1000.0
+
+            if med <= 0 or not np.isfinite(med):
+                return None
+
+            return med
+        except Exception:
+            return None
+
+    @staticmethod
+    def median_depth_from_array(depth_arr, cx, cy, radius=2):
+        """Static helper identical to `_get_depth_meters` but works
+        with a raw numpy array (useful for unit tests).
+        """
+        if depth_arr is None:
+            return None
+        try:
+            h, w = depth_arr.shape[:2]
+            if not (0 <= cy < h and 0 <= cx < w):
+                return None
+            r = max(0, int(radius))
+            x1 = max(0, cx - r)
+            x2 = min(w, cx + r + 1)
+            y1 = max(0, cy - r)
+            y2 = min(h, cy + r + 1)
+
+            patch = np.array(depth_arr[y1:y2, x1:x2]).flatten().astype(np.float64)
+            if patch.size == 0:
+                return None
+
+            if np.issubdtype(patch.dtype, np.floating):
+                valid = patch[np.isfinite(patch) & (patch > 0.0)]
+            else:
+                valid = patch[patch > 0]
+
+            if valid.size == 0:
+                return None
+
+            med = float(np.median(valid))
+            if med > 10.0:
+                med = med / 1000.0
+
+            if med <= 0 or not np.isfinite(med):
+                return None
+            return med
+        except Exception:
+            return None
 
 
 def main(args=None):

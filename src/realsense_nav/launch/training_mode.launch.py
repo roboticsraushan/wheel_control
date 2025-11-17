@@ -65,7 +65,11 @@ def generate_launch_description():
             'enable_gyro': 'true' if rs_cfg.get('enable_gyro', True) else 'false',
             'enable_accel': 'true' if rs_cfg.get('enable_accel', True) else 'false',
             'rgb_camera.profile': rs_cfg.get('rgb_profile', '640x360x30'),
-            'depth_module.profile': rs_cfg.get('depth_profile', '848x480x30'),
+            'depth_module.profile': rs_cfg.get('depth_profile', '640x360x30'),
+            # Enable common RealSense depth filters (can be overridden in hardware.yaml)
+            # Typical filters: spatial, temporal, hole_filling, decimation, disparity
+            # Provide a default set that improves single-pixel dropouts for object depth.
+            'filters': rs_cfg.get('rs_filters', 'spatial,temporal,hole_filling'),
             # Infrared resolution for stereo VO (match run_stereo.py: 640x360x30)
             'infra_rgb': 'false',  # Keep infrared as grayscale (Y8 format)
             'align_depth.enable': 'true' if rs_cfg.get('align_depth', True) else 'false',
@@ -278,11 +282,11 @@ def generate_launch_description():
         # voice_command_node,
         # odometry_node,
         vo_bridge_process,
-        # segformer_node,
+        segformer_node,
         # floorplan_manager_process,
         map_loader_process,
         initial_pose_process,
-        # view_world_node,
+        view_world_node,
         # semantic_visualizer_node,
         static_tf_node,
     ])

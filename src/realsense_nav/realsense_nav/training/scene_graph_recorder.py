@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
 Scene Graph Recorder Node
+=================
+Raushan: this node is not useful for now
+=================
 
 Associates scene graphs with junctions during training.
 Listens for junction recording events and stores the scene graph
