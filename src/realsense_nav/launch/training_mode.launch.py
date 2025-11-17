@@ -87,7 +87,7 @@ def generate_launch_description():
             'yolo_conf': 0.3,
         }],
         output='screen'
-    )
+        )
 
     # Continuous YOLO detector (publishes /scene_graph/detections)
     yolo_detector_node = Node(
@@ -149,6 +149,14 @@ def generate_launch_description():
         package='realsense_nav',
         executable='simple_odometry',
         name='simple_odometry',
+        output='screen'
+    )
+    
+    # Visual odometry bridge (PyCuVSLAM ROS2 bridge)
+    # Run the packaged Python script from workspace to provide visual odometry
+    vo_bridge_script = os.path.join(os.getcwd(), 'src', 'PyCuVSLAM', 'bin', 'x86_64', 'ros2_run_stereo_bridge.py')
+    vo_bridge_process = ExecuteProcess(
+        cmd=['/usr/bin/env', 'python3', vo_bridge_script],
         output='screen'
     )
     
@@ -253,14 +261,23 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Scene graph mapper: convert /scene_graph detections into map-frame markers
+    mapper_script = os.path.join(os.getcwd(), 'src', 'realsense_nav', 'realsense_nav', 'scene_graph_mapper.py')
+    scene_graph_mapper_process = ExecuteProcess(
+        cmd=['/usr/bin/env', 'python3', mapper_script,
+             '--ros-args', '--param', "camera_info_topic:='/camera/camera/color/camera_info'"],
+        output='screen'
+    )
+
     return LaunchDescription([
         realsense_launch,
-        # yolo_detector_node,
-        # scene_graph_node,
+        yolo_detector_node,
+        scene_graph_node,
+        scene_graph_mapper_process,
         # junction_manager_node,
-        # scene_graph_recorder_node,
         # voice_command_node,
         # odometry_node,
+        vo_bridge_process,
         # segformer_node,
         # floorplan_manager_process,
         map_loader_process,
