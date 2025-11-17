@@ -87,6 +87,8 @@ class MapLoader(Node):
             # If image has multiple channels, convert to grayscale
             if len(img.shape) == 3:
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                img = cv2.flip(img, 0)
+
 
             height, width = img.shape
 
