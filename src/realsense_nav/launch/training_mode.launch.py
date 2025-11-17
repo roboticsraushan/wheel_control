@@ -194,7 +194,7 @@ def generate_launch_description():
         executable='view_world',
         name='view_world',
         parameters=[{
-            'floorplan_path': '/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'
+            'floorplan_path': '/home/raushan/control_one/wheel_control/data/maps/my_floorplan_11m.yaml'
         }],
         output='screen'
     )
@@ -212,8 +212,8 @@ def generate_launch_description():
     floorplan_manager_process = ExecuteProcess(
         cmd=['/usr/bin/env', 'python3', floorplan_script,
              '--ros-args',
-             '--param', "floorplan_path:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'",
-             '--param', "metadata_path:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'",
+             '--param', "floorplan_path:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan_11m_1.yaml'",
+             '--param', "metadata_path:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan_11m.yaml'",
              '--param', 'publish_rate:=1.0'
             ],
         output='screen'
@@ -230,7 +230,7 @@ def generate_launch_description():
     map_loader_process = ExecuteProcess(
         cmd=['/usr/bin/env', 'python3', map_loader_script,
              '--ros-args',
-             '--param', "map_yaml:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan.yaml'",
+             '--param', "map_yaml:='/home/raushan/control_one/wheel_control/data/maps/my_floorplan_11m.yaml'",
              '--param', "map_topic:='/map'",
              '--param', 'publish_rate:=1.0'
             ],
@@ -256,7 +256,7 @@ def generate_launch_description():
         executable='semantic_visualizer_node',
         name='semantic_visualizer',
         parameters=[{
-            'map_yaml_path': 'data/maps/my_floorplan.yaml',
+            'map_yaml_path': 'data/maps/my_floorplan_11m.yaml',
             'junction_db_path': 'data/junctions/junction_db.json',
             'topo_map_path': 'data/maps/topological_map.json',
             'web_port': 8080,
