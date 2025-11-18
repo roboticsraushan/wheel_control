@@ -303,11 +303,11 @@ def generate_launch_description():
         # voice_command_node,
         # odometry_node,
         vo_bridge_process,
-        segformer_node,
+        # segformer_node,
         # floorplan_manager_process,
         map_loader_process,
         initial_pose_process,
-        view_world_node,
+        # view_world_node,
         # semantic_visualizer_node,
         static_tf_node,
         # Ensure the RealSense IR emitter is disabled after the camera node has started.
