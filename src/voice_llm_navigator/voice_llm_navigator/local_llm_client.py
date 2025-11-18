@@ -51,9 +51,11 @@ class LocalLLMClient:
             "Return a single valid JSON object only (no surrounding text) with one of the following shapes:\n"
             "- {\"intent\": \"go_to\", \"target_label\": \"chair\"}\n"
             "- {\"intent\": \"list_objects\", \"objects\": [\"chair\", \"table\"]}\n"
+            "- {\"intent\": \"record_scene\"}\n"
             "- {\"intent\": \"stop\"}\n"
             "- {\"intent\": \"unknown\", \"raw\": \"...\"}\n"
-            "Make sure target_label (if present) exactly matches one of the detected object labels."
+            "Make sure target_label (if present) exactly matches one of the detected object labels.\n"
+            "Use 'record_scene' intent for commands about recording or saving what the robot sees."
         )
         return prompt
 
@@ -103,6 +105,11 @@ class LocalLLMClient:
         low = t.lower()
         if 'stop' in low or 'cancel' in low or 'abort' in low:
             return {'intent': 'stop', 'raw': text}
+        
+        # check for record scene commands
+        if any(phrase in low for phrase in ['record', 'save', 'remember']) and \
+           any(phrase in low for phrase in ['items', 'objects', 'things', 'see', 'here', 'this']):
+            return {'intent': 'record_scene', 'raw': text}
 
         # try Ollama if available
         if self.has_ollama:

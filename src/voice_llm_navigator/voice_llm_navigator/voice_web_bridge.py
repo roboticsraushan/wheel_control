@@ -42,6 +42,7 @@ class VoiceWebBridge(Node):
 
         # ROS2 publishers
         self.llm_goal_pub = self.create_publisher(String, '/llm_goal', 10)
+        self.scene_graph_trigger_pub = self.create_publisher(String, '/scene_graph/trigger', 10)
 
         # ROS2 subscribers
         self.sg_sub = self.create_subscription(String, '/scene_graph', self.sg_cb, 10)
@@ -226,6 +227,11 @@ class VoiceWebBridge(Node):
             elif result.get('intent') == 'stop':
                 self.llm_goal_pub.publish(String(data='stop'))
                 self.get_logger().info('[Web UI] Published stop command')
+            elif result.get('intent') == 'record_scene':
+                # Trigger scene graph snapshot for junction recording
+                trigger_msg = String(data='snapshot')
+                self.scene_graph_trigger_pub.publish(trigger_msg)
+                self.get_logger().info('[Web UI] Published scene graph trigger for recording')
 
             # Synthesize reply
             self.get_logger().info(f'[Web UI] Synthesizing reply: {reply[:100]}...')
@@ -266,6 +272,9 @@ class VoiceWebBridge(Node):
                 return f"I can see: {obj_list}."
             else:
                 return "I don't see any objects right now."
+        
+        elif intent == 'record_scene':
+            return "Recording the items I see here. Creating a snapshot of the current scene."
         
         elif intent == 'stop':
             return "Stopping navigation."

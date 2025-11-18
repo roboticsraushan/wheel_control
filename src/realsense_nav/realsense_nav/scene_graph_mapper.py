@@ -32,7 +32,7 @@ class SceneGraphMapper(Node):
         self.declare_parameter('scene_graph_topic', '/scene_graph')
         self.declare_parameter('marker_topic', '/scene_graph/map_markers')
         self.declare_parameter('target_frame', 'map')
-        self.declare_parameter('camera_frame_fallback', 'camera_link')
+        self.declare_parameter('camera_frame_fallback', 'camera_color_optical_frame')
         # Optional default intrinsics used when CameraInfo is not available
         # Set these via launch or param to something reasonable for your camera
         self.declare_parameter('default_fx', 0.0)
@@ -71,6 +71,7 @@ class SceneGraphMapper(Node):
         self.cam_info = msg
         if not self.camera_frame:
             self.camera_frame = msg.header.frame_id or self.camera_frame_fallback
+            self.get_logger().info(f'Using camera frame: {self.camera_frame}')
 
     def _parse_objects(self, payload):
         # payload may be a dict with 'objects' or 'detections', or a list directly
@@ -174,8 +175,11 @@ class SceneGraphMapper(Node):
                     try:
                         from tf2_geometry_msgs import do_transform_pose
                         pose_map = do_transform_pose(pose_cam, t)
-                    except Exception:
+                        self.get_logger().debug(f'Transformed {label} from {frame_id} to {self.target_frame}')
+                    except Exception as e:
                         # If do_transform_pose is not available, fall back to applying translation only
+                        # NOTE: This fallback does NOT apply rotation! You need tf2_geometry_msgs installed.
+                        self.get_logger().warning(f'tf2_geometry_msgs not available, using translation-only transform (rotation ignored!): {e}')
                         pose_map = pose_cam
                         pose_map.header.frame_id = self.target_frame
                         pose_map.pose.position.x += t.transform.translation.x

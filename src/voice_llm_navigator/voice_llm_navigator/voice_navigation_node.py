@@ -30,6 +30,7 @@ class VoiceNavigationNode(Node):
 
         # publishers
         self.llm_goal_pub = self.create_publisher(String, '/llm_goal', 10)
+        self.scene_graph_trigger_pub = self.create_publisher(String, '/scene_graph/trigger', 10)
 
         # subscribers
         self.sg_sub = self.create_subscription(String, '/scene_graph', self.sg_cb, 10)
@@ -121,6 +122,11 @@ class VoiceNavigationNode(Node):
                 elif result.get('intent') == 'list_objects':
                     labels = result.get('objects', [])
                     self.get_logger().info(f'Objects seen: {labels}')
+                elif result.get('intent') == 'record_scene':
+                    # Trigger scene graph snapshot for junction recording
+                    trigger_msg = String(data='snapshot')
+                    self.scene_graph_trigger_pub.publish(trigger_msg)
+                    self.get_logger().info('Published scene graph trigger for recording')
                 elif result.get('intent') == 'stop':
                     self.llm_goal_pub.publish(String(data='stop'))
                 else:
