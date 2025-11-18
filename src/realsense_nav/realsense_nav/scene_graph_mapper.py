@@ -33,6 +33,11 @@ class SceneGraphMapper(Node):
         self.declare_parameter('marker_topic', '/scene_graph/map_markers')
         self.declare_parameter('target_frame', 'map')
         self.declare_parameter('camera_frame_fallback', 'camera_color_optical_frame')
+        # prefer to express detections in a canonical camera frame; this is
+        # usually 'camera_link' in our system (mapped to base_link via a static transform)
+        # We expose it as a parameter so different hardware setups can choose
+        # 'camera_color_optical_frame' or 'camera_link' as the canonical frame.
+        self.declare_parameter('camera_reference_frame', 'map')
         # Optional default intrinsics used when CameraInfo is not available
         # Set these via launch or param to something reasonable for your camera
         self.declare_parameter('default_fx', 0.0)
@@ -54,6 +59,7 @@ class SceneGraphMapper(Node):
 
         self.cam_info = None
         self.camera_frame = None
+        self.camera_reference_frame = self.get_parameter('camera_reference_frame').get_parameter_value().string_value
 
         self.create_subscription(CameraInfo, cam_info_topic, self.camera_info_cb, 10)
         self.create_subscription(String, scene_graph_topic, self.scene_graph_cb, 10)
@@ -72,6 +78,36 @@ class SceneGraphMapper(Node):
         if not self.camera_frame:
             self.camera_frame = msg.header.frame_id or self.camera_frame_fallback
             self.get_logger().info(f'Using camera frame: {self.camera_frame}')
+
+    def _do_transform_pose_robust(self, pose_stamped: PoseStamped, transform):
+        """Call tf2_geometry_msgs.do_transform_pose robustly.
+
+        Some tf2_geometry_msgs versions accept a PoseStamped while others
+        accept Pose only. Try both to maximize compatibility.
+        """
+        try:
+            from tf2_geometry_msgs import do_transform_pose
+        except Exception as e:
+            raise
+
+        try:
+            return do_transform_pose(pose_stamped, transform)
+        except Exception as e:
+            # fallback: some older/newer versions accept a Pose rather than a
+            # PoseStamped; try calling with the inner pose and rewrap the result
+            try:
+                result_pose = do_transform_pose(pose_stamped.pose, transform)
+                # result_pose could be a Pose or a PoseStamped; normalize
+                if hasattr(result_pose, 'position') or hasattr(result_pose, 'orientation'):
+                    # geometry_msgs/Pose returned; build PoseStamped
+                    out = PoseStamped()
+                    out.header = pose_stamped.header
+                    out.pose = result_pose
+                    return out
+                return result_pose
+            except Exception:
+                # re-raise original exception for logging upstream
+                raise e
 
     def _parse_objects(self, payload):
         # payload may be a dict with 'objects' or 'detections', or a list directly
@@ -162,6 +198,7 @@ class SceneGraphMapper(Node):
 
                 pose_cam = PoseStamped()
                 pose_cam.header.stamp = stamp
+                # Pose is initially computed in the source frame (object/frame_id or camera optical frame)
                 pose_cam.header.frame_id = frame_id
                 pose_cam.pose.position.x = float(x_cam)
                 pose_cam.pose.position.y = float(y_cam)
@@ -169,13 +206,31 @@ class SceneGraphMapper(Node):
                 pose_cam.pose.orientation.w = 1.0
 
                 # transform to map frame
+                # Before mapping to the target frame, prefer to express the pose in
+                # the configured camera reference frame. For example, mapping from
+                # 'camera_color_optical_frame' to 'camera_link' ensures the same
+                # canonical camera frame is used for all detections.
+                if self.camera_reference_frame and pose_cam.header.frame_id != self.camera_reference_frame:
+                        t_camref = self.tf_buffer.lookup_transform(self.camera_reference_frame, pose_cam.header.frame_id, rclpy.time.Time())
+                        try:
+                            pose_cam = self._do_transform_pose_robust(pose_cam, t_camref)
+                            pose_cam.header.frame_id = self.camera_reference_frame
+                            self.get_logger().debug(f'Transformed pose from {frame_id} to camera reference {self.camera_reference_frame}')
+                        except Exception as e:
+                            # fallback to translation-only (rotation ignored) if tf2_geometry_msgs not installed
+                            self.get_logger().warning(f'Could not import tf2_geometry_msgs.do_transform_pose while converting to camera reference: {e}')
+                            pose_cam.header.frame_id = self.camera_reference_frame
+                            pose_cam.pose.position.x += t_camref.transform.translation.x
+                            pose_cam.pose.position.y += t_camref.transform.translation.y
+                            pose_cam.pose.position.z += t_camref.transform.translation.z
+
                 try:
-                    t = self.tf_buffer.lookup_transform(self.target_frame, frame_id, rclpy.time.Time())
+                    source_frame_for_map = pose_cam.header.frame_id if pose_cam.header.frame_id else frame_id
+                    t = self.tf_buffer.lookup_transform(self.target_frame, source_frame_for_map, rclpy.time.Time())
                     # try to use tf2_geometry_msgs.do_transform_pose if available
                     try:
-                        from tf2_geometry_msgs import do_transform_pose
-                        pose_map = do_transform_pose(pose_cam, t)
-                        self.get_logger().debug(f'Transformed {label} from {frame_id} to {self.target_frame}')
+                        pose_map = self._do_transform_pose_robust(pose_cam, t)
+                        self.get_logger().debug(f'Transformed {label} from {source_frame_for_map} to {self.target_frame}')
                     except Exception as e:
                         # If do_transform_pose is not available, fall back to applying translation only
                         # NOTE: This fallback does NOT apply rotation! You need tf2_geometry_msgs installed.

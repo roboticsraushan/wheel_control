@@ -209,7 +209,8 @@ def generate_launch_description():
     )
     # Fallback path if running from workspace root
     if not os.path.exists(floorplan_script):
-        floorplan_script = os.path.join(os.getcwd(), 'install', 'memory', 'lib', 'memory', 'floorplan_manager_node.py')
+        # fallback to workspace script if not installed
+        floorplan_script = os.path.join(os.getcwd(), 'src', 'memory', 'memory', 'floorplan_manager_node.py')
 
     floorplan_manager_process = ExecuteProcess(
         cmd=['/usr/bin/env', 'python3', floorplan_script,
@@ -227,7 +228,8 @@ def generate_launch_description():
     )
     # Fallback path if running from workspace root
     if not os.path.exists(map_loader_script):
-        map_loader_script = os.path.join(os.getcwd(), 'install', 'memory', 'lib', 'memory', 'map_loader_node.py')
+        # If install/ was not created (no colcon build yet), use the workspace src path
+        map_loader_script = os.path.join(os.getcwd(), 'src', 'memory', 'memory', 'map_loader_node.py')
 
     map_loader_process = ExecuteProcess(
         cmd=['/usr/bin/env', 'python3', map_loader_script,
@@ -319,6 +321,15 @@ def generate_launch_description():
             period=6.0,
             actions=[ExecuteProcess(
                 cmd=['/usr/bin/env', 'ros2', 'param', 'set', '/camera/camera', 'depth_module.emitter_enabled', '0'],
+                output='screen'
+            )]
+        ),
+        # Publish an initialpose to /initialpose once RViz and initial_pose_to_map_odom are up
+        # We delay this slightly to ensure subscribers exist and other nodes are ready.
+        TimerAction(
+            period=8.0,
+            actions=[ExecuteProcess(
+                cmd=['/usr/bin/env', 'python3', os.path.join(os.getcwd(), 'src', 'realsense_nav', 'scripts', 'publish_initial_pose.py')],
                 output='screen'
             )]
         ),
