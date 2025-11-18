@@ -14,6 +14,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        # Register python console-scripts with the ament index so `ros2 run`
+        # can list and run them on ament_python packages.
+        ('share/ament_index/resource_index/executables', ['resource/executables/memory']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
