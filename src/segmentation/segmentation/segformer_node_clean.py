@@ -4,7 +4,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PointStamped
 from std_msgs.msg import Bool, Float32
 from cv_bridge import CvBridge
 import time
@@ -118,7 +118,7 @@ class SegFormerNode(Node):
         # BEV parameters
         self.declare_parameter('enable_bev', True)
         self.declare_parameter('bev_size_meters', 3.0)  # 3m × 3m
-        self.declare_parameter('bev_resolution', 0.05)  # 5cm per pixel
+        self.declare_parameter('bev_resolution', 0.005)  # 0.5cm per pixel (higher resolution) Raushan, change it later to optimize calculation
         self.declare_parameter('camera_height', 0.5)  # 50cm above ground
         self.declare_parameter('camera_tilt_deg', 15.0)  # 15 degrees downward tilt
         
@@ -149,7 +149,9 @@ class SegFormerNode(Node):
         # BEV publishers
         if self.enable_bev:
             self.bev_map_pub = self.create_publisher(Image, '/segmentation/bev_map', 10)
+            self.local_goal_pub = self.create_publisher(PointStamped, '/segmentation/local_goal', 10)
             self.get_logger().info('BEV map publisher created on /segmentation/bev_map')
+            self.get_logger().info('Local goal publisher created on /segmentation/local_goal')
 
         # load model (local-first)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -937,6 +939,76 @@ class SegFormerNode(Node):
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         
         return angles, free_distances, elapsed_ms
+    
+    def compute_path_scores(self, angles, free_distances, bev_floor, bev_wall):
+        """
+        Compute scores for each candidate path based on distance, smoothness, and frontier.
+        
+        Args:
+            angles: List of sampled angles
+            free_distances: List of free distances for each angle
+            bev_floor: BEV floor mask
+            bev_wall: BEV wall mask
+            
+        Returns:
+            scores: List of normalized scores [0-1] for each path
+            best_idx: Index of the best path
+        """
+        scores = []
+        robot_x = self.bev_pixels // 2
+        robot_y = self.bev_pixels - 1
+        
+        for i, (angle, distance) in enumerate(zip(angles, free_distances)):
+            # 1. Distance score: normalized by max range
+            distance_score = distance / self.bev_size_meters
+            
+            # 2. Smoothness score: prefer forward (0°), penalize turns
+            # Score decreases as angle deviates from 0°
+            smoothness_score = 1.0 - (abs(angle) / 90.0)  # 90° is max penalty
+            
+            # 3. Frontier score: check if path ends at unknown (not wall, not floor)
+            angle_rad = np.deg2rad(angle)
+            dx = np.sin(angle_rad)
+            dy = -np.cos(angle_rad)
+            
+            # Get endpoint
+            distance_px = int(distance / self.bev_resolution)
+            end_x = int(robot_x + dx * distance_px)
+            end_y = int(robot_y + dy * distance_px)
+            end_x = max(0, min(self.bev_pixels - 1, end_x))
+            end_y = max(0, min(self.bev_pixels - 1, end_y))
+            
+            # Check if endpoint hits wall or unknown
+            if distance > 0:
+                # If we have some distance, check what stopped us
+                # Look slightly ahead of endpoint
+                check_x = int(robot_x + dx * (distance_px + 2))
+                check_y = int(robot_y + dy * (distance_px + 2))
+                
+                if 0 <= check_x < self.bev_pixels and 0 <= check_y < self.bev_pixels:
+                    if bev_wall[check_y, check_x] > 0:
+                        frontier_score = 0.2  # Hit wall - less interesting
+                    elif bev_floor[check_y, check_x] == 0:
+                        frontier_score = 1.0  # Hit unknown - explore!
+                    else:
+                        frontier_score = 0.5  # Still on floor
+                else:
+                    frontier_score = 0.8  # Out of bounds - potential exploration
+            else:
+                frontier_score = 0.0  # No distance - blocked immediately
+            
+            # 4. Combined score with weights
+            # Distance: 50%, Smoothness: 30%, Frontier: 20%
+            combined_score = (0.5 * distance_score + 
+                            0.3 * smoothness_score + 
+                            0.2 * frontier_score)
+            
+            scores.append(combined_score)
+        
+        # Find best path
+        best_idx = int(np.argmax(scores)) if scores else 0
+        
+        return scores, best_idx
 
     def image_cb(self, msg: Image):
         """Main callback for processing incoming camera images."""
@@ -985,8 +1057,34 @@ class SegFormerNode(Node):
                     # Sample directions and raycast
                     angles, free_distances, raycast_time = self.sample_directions_and_raycast(bev_floor, bev_wall)
                     
-                    # Debug: log the distances
-                    self.get_logger().info(f'Ray distances: P1={free_distances[0]:.2f}m, P2={free_distances[1]:.2f}m, P3={free_distances[2]:.2f}m, P4={free_distances[3]:.2f}m, P5={free_distances[4]:.2f}m')
+                    # Compute scores for each path
+                    scores, best_idx = self.compute_path_scores(angles, free_distances, bev_floor, bev_wall)
+                    
+                    # Debug: log the distances and scores
+                    score_str = ', '.join([f'P{i+1}={scores[i]:.2f}' for i in range(len(scores))])
+                    self.get_logger().info(f'Path scores: {score_str}, Best: P{best_idx+1}')
+                    
+                    # Compute and publish goal point for best path
+                    best_angle = angles[best_idx]
+                    best_distance = free_distances[best_idx]
+                    
+                    # Place goal at 50% of free distance
+                    goal_distance = 0.5 * best_distance
+                    
+                    # Convert to Cartesian coordinates (robot-centric, base_link frame)
+                    # In base_link: x=forward, y=left, z=up
+                    angle_rad = np.deg2rad(best_angle)
+                    goal_x = goal_distance * np.cos(angle_rad)  # Forward component
+                    goal_y = goal_distance * np.sin(angle_rad)  # Lateral component
+                    
+                    # Publish goal point
+                    goal_msg = PointStamped()
+                    goal_msg.header = msg.header
+                    goal_msg.header.frame_id = "base_link"
+                    goal_msg.point.x = goal_x
+                    goal_msg.point.y = goal_y
+                    goal_msg.point.z = 0.0
+                    self.local_goal_pub.publish(goal_msg)
                     
                     # Create colored BEV visualization
                     # Floor = Green, Wall = Blue, Unknown = Black
@@ -999,17 +1097,8 @@ class SegFormerNode(Node):
                     robot_x = self.bev_pixels // 2  # Center horizontally
                     robot_y = self.bev_pixels - 1   # Bottom row
                     
-                    # Draw the 5 candidate paths/rays
-                    # Use different colors for each ray to make them visible
-                    ray_colors = [
-                        (255, 0, 255),   # P1 (-30°): Magenta
-                        (255, 100, 0),   # P2 (-15°): Blue
-                        (0, 255, 255),   # P3 (0°):   Cyan (forward) - changed from green to avoid floor confusion
-                        (0, 200, 255),   # P4 (+15°): Orange
-                        (0, 0, 255)      # P5 (+30°): Red
-                    ]
-                    
-                    for i, (angle, distance) in enumerate(zip(angles, free_distances)):
+                    # Draw the 5 candidate paths/rays with color-coded scores
+                    for i, (angle, distance, score) in enumerate(zip(angles, free_distances, scores)):
                         # Convert angle and distance to endpoint
                         angle_rad = np.deg2rad(angle)
                         dx = np.sin(angle_rad)
@@ -1024,19 +1113,42 @@ class SegFormerNode(Node):
                         end_x = max(0, min(self.bev_pixels - 1, end_x))
                         end_y = max(0, min(self.bev_pixels - 1, end_y))
                         
-                        # Use unique color for each ray
-                        color = ray_colors[i]
-                        # Make lines thicker for visibility
-                        cv2.line(bev_viz, (robot_x, robot_y), (end_x, end_y), color, 3)
+                        # Color based on score: Green (good) -> Yellow (medium) -> Red (poor)
+                        if i == best_idx:
+                            # Best path: Red
+                            color = (0, 0, 255)
+                            thickness = 4
+                            radius = 5
+                        elif score > 0.6:
+                            # Good path: Green
+                            color = (0, 255, 0)
+                            thickness = 2
+                            radius = 3
+                        elif score > 0.3:
+                            # Medium path: Yellow/Orange
+                            color = (0, 200, 255)
+                            thickness = 2
+                            radius = 3
+                        else:
+                            # Poor path: Red
+                            color = (0, 0, 255)
+                            thickness = 2
+                            radius = 3
+                        
+                        # Draw ray
+                        cv2.line(bev_viz, (robot_x, robot_y), (end_x, end_y), color, thickness)
                         
                         # Draw endpoint circle
-                        cv2.circle(bev_viz, (end_x, end_y), 4, color, -1)
+                        cv2.circle(bev_viz, (end_x, end_y), radius, color, -1)
                         
-                        # Add path label with distance
-                        label_x = end_x + 4
-                        label_y = end_y - 4
-                        cv2.putText(bev_viz, f"P{i+1}:{distance:.1f}m", (label_x, label_y), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+                        # Add path label with score
+                        label_x = end_x + 5
+                        label_y = end_y - 5
+                        label_text = f"P{i+1}:{score:.2f}"
+                        if i == best_idx:
+                            label_text = f"*{label_text}"  # Mark best with asterisk
+                        cv2.putText(bev_viz, label_text, (label_x, label_y), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
                     
                     # Draw robot as triangle pointing forward (up in BEV)
                     triangle_size = 4
@@ -1048,7 +1160,23 @@ class SegFormerNode(Node):
                     cv2.fillPoly(bev_viz, [pts], (0, 255, 255))  # Yellow robot
                     cv2.polylines(bev_viz, [pts], True, (0, 200, 200), 1)  # Border
                     
-                    # Upscale for better visibility (60×60 → 300×300)
+                    # Draw goal point on BEV
+                    if best_distance > 0:
+                        goal_angle_rad = np.deg2rad(best_angle)
+                        goal_dist_px = int(goal_distance / self.bev_resolution)
+                        goal_bev_x = int(robot_x + np.sin(goal_angle_rad) * goal_dist_px)
+                        goal_bev_y = int(robot_y - np.cos(goal_angle_rad) * goal_dist_px)
+                        
+                        # Clamp to bounds
+                        goal_bev_x = max(0, min(self.bev_pixels - 1, goal_bev_x))
+                        goal_bev_y = max(0, min(self.bev_pixels - 1, goal_bev_y))
+                        
+                        # Draw goal marker (bright green circle with cross)
+                        cv2.circle(bev_viz, (goal_bev_x, goal_bev_y), 6, (0, 255, 0), 2)  # Green circle
+                        cv2.drawMarker(bev_viz, (goal_bev_x, goal_bev_y), (0, 255, 0), 
+                                     cv2.MARKER_CROSS, 8, 2)  # Green cross
+                    
+                    # Upscale for better visibility (150×150 → 300×300)
                     bev_viz_large = cv2.resize(bev_viz, (300, 300), interpolation=cv2.INTER_NEAREST)
                     
                     # Add text overlay
