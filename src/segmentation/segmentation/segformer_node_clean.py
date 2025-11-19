@@ -780,11 +780,8 @@ class SegFormerNode(Node):
                 cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)  # Start - Yellow
         else:
             # Path blocked warning
-            warning_text = "PATH BLOCKED - No Safe Route"
-            cv2.putText(overlay, warning_text, (10, 70), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
-            cv2.putText(overlay, warning_text, (10, 70), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            # warning_text = "PATH BLOCKED - No Safe Route"
+            pass
         
         # Display timing information
         timing_text = f"Obstacle: {obstacle_time:.1f}ms | Path: {path_time:.1f}ms | Total: {total_time:.1f}ms"
