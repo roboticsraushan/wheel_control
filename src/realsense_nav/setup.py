@@ -60,6 +60,11 @@ setup(
             'path_from_odom = realsense_nav.path_from_odom:main',
             # Visualization
             'semantic_visualizer_node = realsense_nav.visualization.semantic_visualizer_node:main',
+            # Topological Navigation with DINOv3
+            'dinov3_embedding_node = realsense_nav.dinov3_embedding_node:main',
+            'topological_mapper_node = realsense_nav.topological_mapper_node:main',
+            'joystick_node_recorder = realsense_nav.joystick_node_recorder:main',
+            'place_recognition_node = realsense_nav.place_recognition_node:main',
         ],
     },
 )
