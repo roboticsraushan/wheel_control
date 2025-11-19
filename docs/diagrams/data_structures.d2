@@ -1,0 +1,261 @@
+# Data Structures - Node and Edge Schema
+direction: down
+
+title: {
+  label: "Topological Map Data Structures"
+  near: top-center
+}
+
+node_structure: {
+  label: "Node Data Structure"
+  shape: rectangle
+  style.fill: "#e1f5fe"
+  
+  schema: {
+    label: "Node Schema"
+    shape: rectangle
+    
+    id: "id: string" {
+      style.font: mono
+    }
+    label: "label: string" {
+      style.font: mono
+    }
+    embedding: "embedding: float[384]" {
+      style.font: mono
+    }
+    markers: "markers: Marker[]" {
+      style.font: mono
+    }
+    floor_quality: "floor_traversability: float" {
+      style.font: mono
+    }
+    image: "image_path: string" {
+      style.font: mono
+    }
+    timestamp: "created_timestamp: float" {
+      style.font: mono
+    }
+    connections: "connections: string[]" {
+      style.font: mono
+    }
+  }
+  
+  example: {
+    label: "Example: Kitchen Node"
+    shape: code
+    
+    json: |json
+      {
+        "id": "kitchen_001",
+        "label": "Kitchen",
+        "embedding": [0.23, 0.56, -0.12, ...],
+        "markers": [
+          {
+            "label": "refrigerator",
+            "direction_deg": 45,
+            "distance_m": 2.5,
+            "confidence": 0.92
+          },
+          {
+            "label": "table",
+            "direction_deg": 90,
+            "distance_m": 1.8,
+            "confidence": 0.87
+          }
+        ],
+        "floor_traversability": 0.95,
+        "image_path": "images/kitchen_001.jpg",
+        "created_timestamp": 1700000000.123,
+        "connections": ["hallway_002", "pantry_005"]
+      }
+    |
+  }
+}
+
+marker_structure: {
+  label: "Marker Data Structure"
+  shape: rectangle
+  style.fill: "#fff3e0"
+  
+  schema: {
+  label: "Marker Schema"
+  shape: rectangle
+    
+    label: "label: string" {
+      style.font: mono
+    }
+    direction_deg: "direction_deg: float" {
+      style.font: mono
+    }
+    distance: "distance_m: float" {
+      style.font: mono
+    }
+    confidence: "confidence: float" {
+      style.font: mono
+    }
+  }
+  
+  purpose: "Semantic landmarks\nRelative to node center\nFor place recognition" {
+    shape: text
+    style.italic: true
+  }
+}
+
+edge_structure: {
+  label: "Edge Data Structure"
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  
+  schema: {
+    label: "Edge Schema"
+    shape: rectangle
+    
+    from: "from_node: string" {
+      style.font: mono
+    }
+    to: "to_node: string" {
+      style.font: mono
+    }
+    action: "action: string" {
+      style.font: mono
+    }
+    distance: "distance_m: float" {
+      style.font: mono
+    }
+    duration: "duration_s: float" {
+      style.font: mono
+    }
+    floor: "floor_quality: float" {
+      style.font: mono
+    }
+    markers: "markers_along_path: string[]" {
+      style.font: mono
+    }
+    traversals: "traversal_count: int" {
+      style.font: mono
+    }
+  }
+  
+  example: {
+    label: "Example: Kitchen→Hallway Edge"
+    shape: code
+    
+    json: |json
+      {
+        "from_node": "kitchen_001",
+        "to_node": "hallway_002",
+        "action": "move_forward",
+        "distance_m": 3.5,
+        "duration_s": 5.2,
+        "floor_quality": 0.88,
+        "markers_along_path": ["door"],
+        "traversal_count": 0,
+        "last_traversed": null
+      }
+    |
+  }
+}
+
+belief_structure: {
+  label: "Belief State Structure"
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  
+  schema: {
+    label: "Belief Schema"
+    shape: rectangle
+    
+    timestamp: "timestamp: float" {
+      style.font: mono
+    }
+    distribution: "distribution: Dict[str, float]" {
+      style.font: mono
+    }
+    max_node: "max_likelihood_node: string" {
+      style.font: mono
+    }
+    confidence: "confidence: float" {
+      style.font: mono
+    }
+  }
+  
+  example: {
+    label: "Example: Uncertain Belief"
+    shape: code
+    
+    json: |json
+      {
+        "timestamp": 1700000100.456,
+        "distribution": {
+          "kitchen_001": 0.70,
+          "hallway_002": 0.20,
+          "dining_003": 0.07,
+          "pantry_005": 0.03
+        },
+        "max_likelihood_node": "kitchen_001",
+        "confidence": 0.70
+      }
+    |
+  }
+  
+  states: "High: > 0.8\nMedium: 0.5-0.8\nLow: < 0.5" {
+    shape: text
+    style.italic: true
+  }
+}
+
+graph_structure: {
+  label: "Complete Graph Structure"
+  shape: rectangle
+  style.fill: "#fff9c4"
+  
+  schema: {
+    label: "Graph Schema"
+    shape: rectangle
+    
+    metadata: "metadata: Dict" {
+      style.font: mono
+    }
+    nodes: "nodes: Node[]" {
+      style.font: mono
+    }
+    edges: "edges: Edge[]" {
+      style.font: mono
+    }
+  }
+  
+  example: {
+    label: "Example: nodes.json"
+    shape: code
+    
+    json: |json
+      {
+        "metadata": {
+          "name": "building_floor1",
+          "created": 1700000000.0,
+          "last_modified": 1700001000.0,
+          "num_nodes": 12,
+          "num_edges": 18
+        },
+        "nodes": [ ... ],
+        "edges": [ ... ]
+      }
+    |
+  }
+}
+
+# Relationships
+node_structure -> marker_structure: "contains"
+node_structure -> edge_structure: "referenced by"
+edge_structure -> node_structure: "connects"
+belief_structure -> node_structure: "probability over"
+graph_structure -> node_structure: "aggregates"
+graph_structure -> edge_structure: "aggregates"
+
+# Annotations
+node_structure: "Primary spatial unit\nSemantic identity"
+marker_structure: "Observation-based\nRobust to viewpoint"
+edge_structure: "Transition metadata\nHistorical data"
+belief_structure: "Runtime localization\nUncertainty quantification"
+graph_structure: "Persistent storage\nJSON format"

@@ -1,0 +1,133 @@
+# Place Recognition - Localization Flow
+direction: down
+
+title: {
+  label: "Place Recognition & Localization System"
+  near: top-center
+}
+
+input: {
+  label: "Sensor Inputs"
+  shape: rectangle
+  style.fill: "#e1f5fe"
+  
+  camera: "RGB Image" {shape: document}
+  markers: "Detected Markers" {shape: document}
+  motion: "Visual Odometry" {shape: document}
+}
+
+processing: {
+  label: "Multi-Modal Processing"
+  shape: rectangle
+  style.fill: "#fff3e0"
+  
+  visual_sim: {
+    label: "Visual Similarity\n(DINOv2 Embedding)"
+    style.multiple: true
+    
+    extract: "Extract 1536-dim\nEmbedding" {shape: step}
+    compare: "Cosine Similarity\nvs All Nodes" {shape: step}
+    prob_v: "P(node | visual)" {shape: parallelogram}
+  }
+  
+  marker_val: {
+    label: "Marker Validation\n(YOLO Detections)"
+    style.multiple: true
+    
+    match: "Compare Detected\nvs Expected" {shape: step}
+    jaccard: "Jaccard Similarity" {shape: step}
+    prob_m: "P(node | markers)" {shape: parallelogram}
+  }
+  
+  motion_con: {
+    label: "Motion Consistency\n(Graph Connectivity)"
+    style.multiple: true
+    
+    track: "Track Relative\nMotion" {shape: step}
+    propagate: "Update Based on\nConnections" {shape: step}
+    prob_o: "P(node | motion)" {shape: parallelogram}
+  }
+}
+
+fusion: {
+  label: "Bayesian Fusion"
+  shape: hexagon
+  style.fill: "#f3e5f5"
+  style.font-size: 16
+  style.bold: true
+  
+  formula: "P(node | all) ∝\nP(visual) × P(markers) × P(motion)" {
+    shape: text
+    style.italic: true
+  }
+}
+
+decision: {
+  label: "Decision Making"
+  shape: diamond
+  style.fill: "#fff9c4"
+}
+
+decision_high: "Confidence > 0.8\n'Localized'" {shape: rectangle style.fill: "#c8e6c9"}
+decision_medium: "Confidence 0.5-0.8\n'Uncertain'" {shape: rectangle style.fill: "#fff9c4"}
+decision_low: "Confidence < 0.5\n'Lost'" {shape: rectangle style.fill: "#ffcdd2"}
+
+output: {
+  label: "Output"
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  
+  belief: "Belief Distribution\n{Kitchen: 0.7, Hall: 0.2, ...}" {shape: stored_data}
+  node_id: "Current Node ID" {shape: document}
+  confidence: "Confidence Score" {shape: document}
+}
+
+recovery: {
+  label: "Recovery Actions"
+  shape: rectangle
+  style.fill: "#ffebee"
+  
+  rotate: "Rotate 360°\nfor More Data" {shape: step}
+  relocalize: "Global\nRe-localization" {shape: step}
+  human: "Request Human\nAssistance" {shape: step}
+}
+
+# Connections
+input.camera -> processing.visual_sim.extract
+input.markers -> processing.marker_val.match
+input.motion -> processing.motion_con.track
+
+processing.visual_sim.extract -> processing.visual_sim.compare
+processing.visual_sim.compare -> processing.visual_sim.prob_v
+
+processing.marker_val.match -> processing.marker_val.jaccard
+processing.marker_val.jaccard -> processing.marker_val.prob_m
+
+processing.motion_con.track -> processing.motion_con.propagate
+processing.motion_con.propagate -> processing.motion_con.prob_o
+
+processing.visual_sim.prob_v -> fusion
+processing.marker_val.prob_m -> fusion
+processing.motion_con.prob_o -> fusion
+
+fusion -> decision
+
+decision -> decision_high: "High\nConfidence"
+decision -> decision_medium: "Medium\nConfidence"
+decision -> decision_low: "Low\nConfidence"
+
+decision_high -> output.belief
+decision_high -> output.node_id
+decision_high -> output.confidence
+
+decision_medium -> output.belief: "Continue\nMonitoring"
+decision_medium -> output.confidence
+
+decision_low -> recovery.rotate
+recovery.rotate -> recovery.relocalize
+recovery.relocalize -> recovery.human
+recovery.human -> fusion: "Retry"
+
+# Annotations
+processing.visual_sim: "Similarity > 0.9 = High\nSimilarity < 0.7 = Low"
+processing.marker_val: "Expected: {fridge, table}\nObserved: {fridge, table, chair}\nJaccard: 2/3 = 0.67"

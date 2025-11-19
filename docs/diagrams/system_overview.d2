@@ -1,0 +1,137 @@
+# System Overview - High-Level Architecture
+direction: right
+
+title: {
+  label: "Human-Inspired Topological Navigation System"
+  near: top-center
+}
+
+sensors: {
+  label: "Sensor Layer"
+  shape: rectangle
+  style.fill: "#e1f5fe"
+  
+  realsense: {
+    label: "RealSense D455\nRGB + Depth"
+    shape: cylinder
+  }
+  
+  vo: {
+    label: "Visual Odometry\ncuVSLAM"
+    shape: cylinder
+  }
+  
+  imu: {
+    label: "IMU\nOrientation"
+    shape: cylinder
+  }
+}
+
+perception: {
+  label: "Perception Layer"
+  shape: rectangle
+  style.fill: "#fff3e0"
+  
+  yolo: {
+    label: "YOLO\nObject Detection"
+    shape: hexagon
+  }
+  
+  sam: {
+    label: "SAM\nFloor Segmentation"
+    shape: hexagon
+  }
+  
+  dinov2: {
+    label: "DINOv2\nScene Embedding"
+    shape: hexagon
+  }
+  
+  mapper: {
+    label: "Scene Graph Mapper\nTransform to Map"
+    shape: hexagon
+  }
+}
+
+cognition: {
+  label: "Cognitive Layer"
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  
+  place: {
+    label: "Place Recognition\nDINOv2 Similarity"
+    shape: diamond
+  }
+  
+  belief: {
+    label: "Belief Tracker\nBayesian Fusion"
+    shape: diamond
+  }
+  
+  planner: {
+    label: "Topological Planner\nA* Graph Search"
+    shape: diamond
+  }
+}
+
+control: {
+  label: "Control Layer"
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  
+  executor: {
+    label: "Edge Executor\nPath Traversal"
+    shape: parallelogram
+  }
+  
+  reactive: {
+    label: "Reactive Controller\nFloor Following"
+    shape: parallelogram
+  }
+}
+
+actuators: {
+  label: "Actuator Layer"
+  shape: rectangle
+  style.fill: "#fce4ec"
+  
+  bridge: {
+    label: "Motor Bridge\nSerial Protocol"
+    shape: page
+  }
+  
+  motors: {
+    label: "DC Motors\nDifferential Drive"
+    shape: cylinder
+  }
+}
+
+database: {
+  label: "Topological Map\nDatabase"
+  shape: stored_data
+  style.fill: "#fff9c4"
+}
+
+# Connections
+sensors.realsense -> perception.yolo
+sensors.realsense -> perception.sam
+sensors.realsense -> perception.dinov2
+sensors.vo -> cognition.belief
+sensors.imu -> control.reactive
+
+perception.yolo -> perception.mapper
+perception.mapper -> cognition.place
+perception.dinov2 -> cognition.place
+perception.sam -> control.reactive
+
+cognition.place -> cognition.belief
+cognition.belief -> cognition.planner
+cognition.planner -> control.executor
+
+control.executor -> control.reactive
+control.reactive -> actuators.bridge
+actuators.bridge -> actuators.motors
+
+database -> cognition.place: "Load Nodes"
+database -> cognition.planner: "Load Graph"
+control.executor -> database: "Update Traversals"

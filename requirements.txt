@@ -1,0 +1,19 @@
+# ROS2 Navigation with Topological Place Recognition
+# DINOv3 dependencies
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0
+safetensors>=0.4.0
+
+# Vision processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Existing dependencies
+ultralytics>=8.0.0  # YOLOv8
+segment-anything>=1.0  # SAM
+
+# Optional: For faster inference
+# torchvision>=0.15.0
+# timm>=0.9.0  # PyTorch Image Models

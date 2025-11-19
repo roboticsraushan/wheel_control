@@ -1,0 +1,173 @@
+# Navigation Execution Flow
+direction: down
+
+title: {
+  label: "Topological Navigation Execution"
+  near: top-center
+}
+
+goal: {
+  label: "Navigation Goal"
+  shape: oval
+  style.fill: "#e1f5fe"
+  style.font-size: 16
+  
+  text: "Go to Bedroom" {shape: text style.italic: true}
+}
+
+plan: {
+  label: "STEP 1: Topological Planning"
+  shape: rectangle
+  style.fill: "#fff3e0"
+  
+  graph: "Load Graph\nStructure" {shape: stored_data}
+  current: "Get Current\nNode (Kitchen)" {shape: parallelogram}
+  target: "Set Target\nNode (Bedroom)" {shape: parallelogram}
+  search: "A* Search\nCost: distance + floor_quality" {shape: hexagon}
+  path: "Path:\nKitchen → Hallway → Bedroom" {
+    shape: document
+    style.fill: "#c8e6c9"
+  }
+}
+
+execute: {
+  label: "STEP 2: Edge Execution Loop"
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.multiple: true
+  
+  edge: "For Each Edge\n(Kitchen → Hallway)" {
+    shape: text
+    style.bold: true
+  }
+  
+  verify: {
+    label: "a) Verify at Start"
+    shape: step
+    
+    check: "Place Recognition\nConfidence > 0.8?" {shape: diamond}
+    ok: "Proceed" {style.fill: "#c8e6c9"}
+    fail: "Re-localize" {style.fill: "#ffcdd2"}
+  }
+  
+  action: {
+    label: "b) Execute Action"
+    shape: step
+    
+    cmd: "Action: move_forward\nDistance: 3.5m" {shape: parallelogram}
+  }
+  
+  reactive: {
+    label: "c) Reactive Control"
+    shape: step
+    style.fill: "#e8f5e9"
+    
+    floor: "SAM Floor Mask\nIdentify Surface" {shape: hexagon}
+    follow: "Follow Floor\nCenterline" {shape: hexagon}
+    avoid: "Obstacle\nAvoidance" {shape: hexagon}
+    vel: "Publish\n/cmd_vel" {shape: document style.fill: "#fff9c4"}
+  }
+  
+  monitor: {
+    label: "d) Monitor Progress"
+    shape: step
+    
+    expect: "Expect Markers:\n'door'" {shape: parallelogram}
+    track: "Track Distance\nvia Visual Odom" {shape: parallelogram}
+    check_markers: "Unexpected\nMarkers?" {shape: diamond}
+  }
+  
+  arrive: {
+    label: "e) Confirm Arrival"
+    shape: step
+    
+    recognize: "Place Recognition:\n'Now at Hallway'" {shape: hexagon}
+    conf: "Confidence\n> 0.8?" {shape: diamond}
+    next: "Proceed to\nNext Edge" {style.fill: "#c8e6c9"}
+  }
+}
+
+complete: {
+  label: "STEP 3: Completion"
+  shape: rectangle
+  style.fill: "#c8e6c9"
+  
+  final: "Place Recognition:\n'At Bedroom'" {shape: hexagon style.fill: "#a5d6a7"}
+  success: "Navigation SUCCESS" {
+    shape: oval
+    style.fill: "#66bb6a"
+    style.font-size: 16
+    style.bold: true
+  }
+  status: "Publish:\n/navigation/status" {shape: document}
+}
+
+failure: {
+  label: "Failure Handling"
+  shape: rectangle
+  style.fill: "#ffebee"
+  
+  stuck: "Robot Stuck" {shape: hexagon}
+  lost: "Lost (Low Confidence)" {shape: hexagon}
+  wrong: "Wrong Node" {shape: hexagon}
+  
+  recovery: "Recovery Strategy" {
+    shape: step
+    style.fill: "#ef5350"
+    
+    alt: "Find Alternate\nPath" {shape: parallelogram}
+    global: "Global\nRe-localization" {shape: parallelogram}
+    abort: "Abort and\nRequest Help" {shape: parallelogram}
+  }
+}
+
+# Main flow
+goal -> plan.graph
+plan.graph -> plan.current
+plan.current -> plan.target
+plan.target -> plan.search
+plan.search -> plan.path
+
+plan.path -> execute.verify.check
+
+execute.verify.check -> execute.verify.ok: "Yes"
+execute.verify.check -> execute.verify.fail: "No"
+execute.verify.fail -> failure.lost
+
+execute.verify.ok -> execute.action.cmd
+
+execute.action.cmd -> execute.reactive.floor
+execute.reactive.floor -> execute.reactive.follow
+execute.reactive.follow -> execute.reactive.avoid
+execute.reactive.avoid -> execute.reactive.vel
+
+execute.reactive.vel -> execute.monitor.expect
+execute.monitor.expect -> execute.monitor.track
+execute.monitor.track -> execute.monitor.check_markers
+
+execute.monitor.check_markers -> execute.arrive.recognize: "Expected"
+execute.monitor.check_markers -> failure.wrong: "Unexpected"
+
+execute.arrive.recognize -> execute.arrive.conf
+execute.arrive.conf -> execute.arrive.next: "Yes"
+execute.arrive.conf -> failure.lost: "No"
+
+execute.arrive.next -> execute.verify.check: "More\nEdges"
+execute.arrive.next -> complete.final: "Last\nEdge"
+
+complete.final -> complete.success
+complete.success -> complete.status
+
+# Failure handling
+failure.stuck -> failure.recovery.alt
+failure.lost -> failure.recovery.global
+failure.wrong -> failure.recovery.global
+
+failure.recovery.alt -> execute.verify.check: "Retry"
+failure.recovery.global -> plan.current: "Re-plan"
+failure.recovery.abort -> complete.status: "FAILED"
+
+# Annotations
+plan: "Cost function considers:\n• Distance\n• Floor quality\n• Historical success"
+execute.reactive: "30 Hz control loop\nLike human walking"
+execute.monitor: "Continuous validation\nAdapts to environment"

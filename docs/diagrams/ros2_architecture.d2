@@ -1,0 +1,219 @@
+# ROS2 Node and Topic Architecture
+direction: right
+
+title: {
+  label: "ROS2 System Architecture - Node Graph"
+  near: top-center
+}
+
+hardware: {
+  label: "Hardware Layer"
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  
+  realsense: "RealSense D455\nCamera" {
+    shape: cylinder
+  }
+  
+  arduino: "Arduino Due\nMotor Controller" {
+    shape: cylinder
+  }
+  
+  joystick: "Logitech F310\nGamepad" {
+    shape: cylinder
+  }
+}
+
+camera_nodes: {
+  label: "Camera Nodes"
+  shape: rectangle
+  style.fill: "#fff3e0"
+  
+  rs_node: "realsense2_camera_node" {
+    shape: hexagon
+    style.fill: "#ffe0b2"
+  }
+  
+  vo_node: "visual_odometry_node\n(cuVSLAM)" {
+    shape: hexagon
+    style.fill: "#ffe0b2"
+  }
+  
+  imu_node: "imu_odometry_node" {
+    shape: hexagon
+    style.fill: "#ffe0b2"
+  }
+}
+
+perception_nodes: {
+  label: "Perception Nodes"
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  
+  scene_graph: "scene_graph_node\n(YOLO Detection)" {
+    shape: hexagon
+    style.fill: "#e1bee7"
+  }
+  
+  mapper: "scene_graph_mapper\n(Transform to Map)" {
+    shape: hexagon
+    style.fill: "#e1bee7"
+  }
+  
+  sam: "sam_floor_segmentation" {
+    shape: hexagon
+    style.fill: "#e1bee7"
+  }
+  
+  dinov2: "dinov2_embedding_node\n(Scene Descriptor)" {
+    shape: hexagon
+    style.fill: "#e1bee7"
+  }
+}
+
+mapping_nodes: {
+  label: "Mapping Nodes (Training)"
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  
+  topo_mapper: "topological_mapper_node" {
+    shape: hexagon
+    style.fill: "#c8e6c9"
+  }
+  
+  node_recorder: "joystick_node_recorder" {
+    shape: hexagon
+    style.fill: "#c8e6c9"
+  }
+}
+
+navigation_nodes: {
+  label: "Navigation Nodes (Autonomous)"
+  shape: rectangle
+  style.fill: "#fff9c4"
+  
+  place_rec: "place_recognition_node\n(DINOv2 Comparison)" {
+    shape: hexagon
+    style.fill: "#fff59d"
+  }
+  
+  belief: "belief_tracker_node\n(Bayesian Fusion)" {
+    shape: hexagon
+    style.fill: "#fff59d"
+  }
+  
+  planner: "topological_planner_node\n(A* Search)" {
+    shape: hexagon
+    style.fill: "#fff59d"
+  }
+  
+  executor: "edge_executor_node" {
+    shape: hexagon
+    style.fill: "#fff59d"
+  }
+  
+  reactive: "reactive_controller_node\n(Floor Following)" {
+    shape: hexagon
+    style.fill: "#fff59d"
+  }
+}
+
+control_nodes: {
+  label: "Control Nodes"
+  shape: rectangle
+  style.fill: "#ffebee"
+  
+  joy: "joy_node" {
+    shape: hexagon
+    style.fill: "#ffcdd2"
+  }
+  
+  teleop: "teleop_twist_joy" {
+    shape: hexagon
+    style.fill: "#ffcdd2"
+  }
+  
+  bridge: "serial_motor_bridge" {
+    shape: hexagon
+    style.fill: "#ffcdd2"
+  }
+}
+
+topics: {
+  label: "Key Topics"
+  shape: rectangle
+  style.fill: "#e0e0e0"
+  
+  rgb: "/camera/color/image_raw" {shape: document}
+  depth: "/camera/depth/image_rect_raw" {shape: document}
+  odom: "/camera/odom/sample" {shape: document}
+  imu: "/imu/data" {shape: document}
+  scene: "/scene_graph" {shape: document}
+  markers: "/scene_graph/map_markers" {shape: document}
+  floor: "/floor/mask" {shape: document}
+  embedding: "/dinov2/embedding" {shape: document}
+  belief_topic: "/localization/belief" {shape: document}
+  node_id: "/localization/node_id" {shape: document}
+  nav_plan: "/navigation/plan" {shape: document}
+  cmd_vel: "/cmd_vel" {
+    shape: document
+    style.fill: "#ffeb3b"
+  }
+}
+
+# Hardware to Camera Nodes
+hardware.realsense -> camera_nodes.rs_node: "USB 3.2"
+hardware.joystick -> control_nodes.joy: "USB"
+
+# Camera nodes to topics
+camera_nodes.rs_node -> topics.rgb
+camera_nodes.rs_node -> topics.depth
+camera_nodes.vo_node -> topics.odom
+camera_nodes.imu_node -> topics.imu
+
+# Topics to Perception
+topics.rgb -> perception_nodes.scene_graph
+topics.depth -> perception_nodes.scene_graph
+topics.rgb -> perception_nodes.sam
+topics.rgb -> perception_nodes.dinov2
+
+# Perception to topics
+perception_nodes.scene_graph -> topics.scene
+perception_nodes.mapper -> topics.markers
+perception_nodes.sam -> topics.floor
+perception_nodes.dinov2 -> topics.embedding
+
+# Mapping flow
+topics.scene -> mapping_nodes.topo_mapper
+topics.embedding -> mapping_nodes.topo_mapper
+control_nodes.joy -> mapping_nodes.node_recorder
+mapping_nodes.node_recorder -> mapping_nodes.topo_mapper: "trigger"
+
+# Navigation flow
+topics.embedding -> navigation_nodes.place_rec
+topics.scene -> navigation_nodes.belief
+topics.odom -> navigation_nodes.belief
+navigation_nodes.place_rec -> navigation_nodes.belief
+navigation_nodes.belief -> topics.belief_topic
+navigation_nodes.belief -> topics.node_id
+topics.node_id -> navigation_nodes.planner
+navigation_nodes.planner -> topics.nav_plan
+topics.nav_plan -> navigation_nodes.executor
+topics.floor -> navigation_nodes.reactive
+topics.odom -> navigation_nodes.reactive
+topics.imu -> navigation_nodes.reactive
+navigation_nodes.executor -> navigation_nodes.reactive: "target"
+navigation_nodes.reactive -> topics.cmd_vel
+
+# Control flow
+control_nodes.joy -> control_nodes.teleop
+control_nodes.teleop -> topics.cmd_vel: "manual"
+topics.cmd_vel -> control_nodes.bridge
+control_nodes.bridge -> hardware.arduino: "Serial 115200"
+
+# Annotations
+camera_nodes: "Sensor drivers\n30 Hz RGB/Depth\n60 Hz IMU"
+perception_nodes: "Multi-modal feature extraction\nReal-time processing"
+mapping_nodes: "Human-in-the-loop\nNode creation"
+navigation_nodes: "Autonomous execution\nUncertainty-aware"
+topics.cmd_vel: "Velocity commands\nlinear.x, angular.z"

@@ -1,0 +1,203 @@
+# Mapping Phase - Node Creation
+direction: down
+
+title: {
+  label: "Topological Mapping Phase (Training)"
+  near: top-center
+}
+
+exploration: {
+  label: "Joystick Exploration"
+  shape: oval
+  style.fill: "#e1f5fe"
+  
+  # human: "Human Drives\nRobot with Joystick" {
+  #   shape: person
+  #   style.font-size: 16
+  # }
+}
+
+trigger: {
+  label: "Node Creation Trigger"
+  shape: diamond
+  style.fill: "#fff3e0"
+  
+  manual: "Manual:\nJoystick Button" {shape: rectangle}
+  auto_dist: "Auto: Every\nN Meters" {shape: rectangle}
+  auto_scene: "Auto: Scene\nChange Detected" {shape: rectangle}
+  semantic: "Semantic:\nAt Doorway/Junction" {shape: rectangle}
+}
+
+capture: {
+  label: "Data Capture at Node"
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  # style.multiple: true
+  
+  step1: {
+    label: "1. Capture RGB Image"
+    shape: step
+    image: "1280x720\nRGB Frame" {shape: document}
+  }
+  
+  step2: {
+    label: "2. Extract DINOv2 Embedding"
+    shape: step
+    embedding: "1536-dim\nScene Descriptor" {shape: stored_data}
+  }
+  
+  step3: {
+    label: "3. Record YOLO Markers"
+    shape: step
+  markers: "Detected Objects:\nfridge: 45° 2.5m\ntable: 90° 1.8m" {shape: document}
+  }
+  
+  step4: {
+    label: "4. Compute Floor Quality"
+    shape: step
+    traversability: "SAM Segmentation\nScore: 0.95" {shape: parallelogram}
+  }
+  
+  step5: {
+    label: "5. Store Pose"
+    shape: step
+    pose: "Visual Odometry\n(x, y, θ)" {shape: parallelogram}
+  }
+  
+  step6: {
+    label: "6. Save Thumbnail"
+    shape: step
+    thumb: "Compressed JPG\nfor Inspection" {shape: document}
+  }
+}
+
+edge: {
+  label: "Edge Recording (Between Nodes)"
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  
+  track: "Track Motion\n(Visual Odometry)" {shape: hexagon}
+  props: {
+    label: "Record Properties"
+    
+    dist: "Distance: 3.5m" {shape: parallelogram}
+    dir: "Direction: forward" {shape: parallelogram}
+    time: "Duration: 5.2s" {shape: parallelogram}
+    floor: "Avg Floor Quality: 0.88" {shape: parallelogram}
+    markers: "Markers Along Path:\n['door']" {shape: parallelogram}
+  }
+}
+
+storage: {
+  label: "Storage"
+  shape: rectangle
+  style.fill: "#fff9c4"
+  
+  node_db: {
+    label: "nodes.json"
+    shape: stored_data
+    style.fill: "#fff59d"
+    
+      json: |json
+        {
+          "id": "kitchen_001",
+          "label": "Kitchen",
+          "embedding": [0.23, 0.56, -0.12],
+          "markers": ["refrigerator", "table"],
+          "connections": ["hallway_002"]
+        }
+    |
+  }
+  
+  edge_db: {
+    label: "edges.json"
+    shape: stored_data
+    style.fill: "#fff59d"
+    
+      json: |json
+        {
+          "from": "kitchen_001",
+          "to": "hallway_002",
+          "distance_m": 3.5,
+          "action": "move_forward"
+        }
+    |
+  }
+  
+  images: {
+    label: "images/"
+    shape: cylinder
+    
+    files: "kitchen_001.jpg\nhallway_002.jpg\n..." {
+      shape: text
+      style.font-size: 10
+    }
+  }
+}
+
+// graph_viz: {
+//   label: "Topological Graph"
+//   shape: rectangle
+//   style.fill: "#e1bee7"
+//   
+//   kitchen: "Kitchen\nfridge, table" {shape: circle style.fill: "#ce93d8"}
+//   hallway: "Hallway\ndoor" {shape: circle style.fill: "#ce93d8"}
+//   bedroom: "Bedroom\nbed, lamp" {shape: circle style.fill: "#ce93d8"}
+//   
+//   kitchen -> hallway: "3.5m\nforward"
+//   hallway -> bedroom: "4.2m\nright turn"
+// }
+
+# Main flow
+exploration.human -> trigger
+
+trigger -> trigger.manual
+trigger -> trigger.auto_dist
+trigger -> trigger.auto_scene
+trigger -> trigger.semantic
+
+trigger.manual -> capture.step1
+trigger.auto_dist -> capture.step1
+trigger.auto_scene -> capture.step1
+trigger.semantic -> capture.step1
+
+capture.step1 -> capture.step1.image
+capture.step1.image -> capture.step2
+
+capture.step2 -> capture.step2.embedding
+capture.step2.embedding -> capture.step3
+
+capture.step3 -> capture.step3.markers
+capture.step3.markers -> capture.step4
+
+capture.step4 -> capture.step4.traversability
+capture.step4.traversability -> capture.step5
+
+capture.step5 -> capture.step5.pose
+capture.step5.pose -> capture.step6
+
+capture.step6 -> capture.step6.thumb
+capture.step6.thumb -> edge.track
+
+edge.track -> edge.props.dist
+edge.props.dist -> edge.props.dir
+edge.props.dir -> edge.props.time
+edge.props.time -> edge.props.floor
+edge.props.floor -> edge.props.markers
+
+edge.props.markers -> storage.node_db
+edge.props.markers -> storage.edge_db
+capture.step6.thumb -> storage.images
+
+storage.node_db -> graph_viz.kitchen
+storage.node_db -> graph_viz.hallway
+storage.node_db -> graph_viz.bedroom
+
+storage.edge_db -> graph_viz.kitchen
+storage.edge_db -> graph_viz.hallway
+
+# Annotations
+trigger: "Flexible triggering\nAdapts to environment"
+capture: "Rich multi-modal data\nRobust to changes"
+edge: "Lightweight metadata\nNo geometric precision needed"
+storage: "Human-readable JSON\nEasy to inspect/edit"
