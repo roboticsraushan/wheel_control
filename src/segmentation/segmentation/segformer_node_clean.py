@@ -19,7 +19,7 @@ class SegFormerNode(Node):
 
         # parameters
         self.declare_parameter('model_name', 'nvidia/segformer-b1-finetuned-ade-512-512')
-        self.declare_parameter('local_model_dir', 'models/segformer-b1-finetuned-ade-512-512')
+        self.declare_parameter('local_model_dir', '/home/raushan/control_one/wheel_control/src/segmentation/models/segformer-b1-finetuned-ade-512-512')
         self.declare_parameter('allow_download', False)
         self.declare_parameter('prob_threshold', 0.5)
         self.declare_parameter('min_area', 5000)
@@ -61,11 +61,27 @@ class SegFormerNode(Node):
             local_path = (Path(__file__).resolve().parent / local_path).resolve()
 
         if local_path.exists():
+            # Check if it's a Hugging Face repo structure with snapshots
+            repo_dirs = [d for d in local_path.iterdir() if d.is_dir() and 'models--' in d.name]
+            if repo_dirs:
+                repo_dir = repo_dirs[0]
+                snapshots_dir = repo_dir / 'snapshots'
+                if snapshots_dir.exists():
+                    snapshot_dirs = list(snapshots_dir.iterdir())
+                    if snapshot_dirs:
+                        model_path = snapshot_dirs[0]  # Use the first (latest) snapshot
+                    else:
+                        model_path = local_path
+                else:
+                    model_path = local_path
+            else:
+                model_path = local_path
+            
             try:
-                self.processor = AutoImageProcessor.from_pretrained(str(local_path), local_files_only=True)
-                self.model = SegformerForSemanticSegmentation.from_pretrained(str(local_path), local_files_only=True).to(self.device)
+                self.processor = AutoImageProcessor.from_pretrained(str(model_path), local_files_only=True)
+                self.model = SegformerForSemanticSegmentation.from_pretrained(str(model_path), local_files_only=True).to(self.device)
                 loaded = True
-                self.get_logger().info(f'Loaded model from {local_path}')
+                self.get_logger().info(f'Loaded model from {model_path}')
             except Exception as e:
                 self.get_logger().warn(f'Local load failed: {e}')
 
