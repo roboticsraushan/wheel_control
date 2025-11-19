@@ -115,14 +115,41 @@ class SegFormerNode(Node):
         self._postproc_acc = 0.0
         self._profile_count = 0
 
+        # BEV parameters
+        self.declare_parameter('enable_bev', True)
+        self.declare_parameter('bev_size_meters', 3.0)  # 3m × 3m
+        self.declare_parameter('bev_resolution', 0.05)  # 5cm per pixel
+        self.declare_parameter('camera_height', 0.5)  # 50cm above ground
+        self.declare_parameter('camera_tilt_deg', 15.0)  # 15 degrees downward tilt
+        
+        self.enable_bev = bool(self.get_parameter('enable_bev').value)
+        self.bev_size_meters = float(self.get_parameter('bev_size_meters').value)
+        self.bev_resolution = float(self.get_parameter('bev_resolution').value)
+        self.bev_pixels = int(self.bev_size_meters / self.bev_resolution)  # 60×60 pixels
+        self.camera_height = float(self.get_parameter('camera_height').value)
+        self.camera_tilt_deg = float(self.get_parameter('camera_tilt_deg').value)
+        
+        # Robot footprint for raycasting (radius = half of footprint_size)
+        self.robot_radius = self.robot_footprint_size / 2.0  # 0.2m (20cm radius)
+        
+        self.get_logger().info(
+            f'BEV: enabled={self.enable_bev}, size={self.bev_size_meters}m, resolution={self.bev_resolution}m/px ({self.bev_pixels}×{self.bev_pixels} pixels), robot_radius={self.robot_radius}m'
+        )
+
         # pubs/subs
         self.image_sub = self.create_subscription(Image, '/camera/camera/color/image_raw', self.image_cb, 2)
         self.mask_pub = self.create_publisher(Image, '/segmentation/floor_mask', 10)
+        self.wall_mask_pub = self.create_publisher(Image, '/segmentation/wall_mask', 10)
         self.overlay_pub = self.create_publisher(Image, '/segmentation/overlay', 10)
         self.seg_image_pub = self.create_publisher(Image, '/segmentation/image', 10)
         self.centroid_pub = self.create_publisher(Point, '/segmentation/centroid', 10)
         self.navigable_pub = self.create_publisher(Bool, '/segmentation/navigable', 10)
         self.conf_pub = self.create_publisher(Float32, '/segmentation/floor_confidence', 10)
+        
+        # BEV publishers
+        if self.enable_bev:
+            self.bev_map_pub = self.create_publisher(Image, '/segmentation/bev_map', 10)
+            self.get_logger().info('BEV map publisher created on /segmentation/bev_map')
 
         # load model (local-first)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -183,19 +210,32 @@ class SegFormerNode(Node):
                 raise RuntimeError('Local model not present and allow_download=False')
 
         # find floor-like classes
-        self.keywords = ['floor', 'ground', 'road', 'pavement', 'sidewalk', 'carpet']
+        self.floor_keywords = ['floor', 'ground', 'road', 'pavement', 'sidewalk', 'carpet']
         self.floor_ids = []
+        
+        # find wall-like classes
+        self.wall_keywords = ['wall']
+        self.wall_ids = []
+        
         id2label = getattr(self.model.config, 'id2label', None)
         if id2label:
             for k, v in id2label.items():
                 name = str(v).lower()
-                if any(kw in name for kw in self.keywords):
+                # Check for floor classes
+                if any(kw in name for kw in self.floor_keywords):
                     try:
                         self.floor_ids.append(int(k))
                     except Exception:
                         pass
+                # Check for wall classes
+                if any(kw in name for kw in self.wall_keywords):
+                    try:
+                        self.wall_ids.append(int(k))
+                    except Exception:
+                        pass
 
         self.get_logger().info(f'Floor class ids: {self.floor_ids}')
+        self.get_logger().info(f'Wall class ids: {self.wall_ids}')
 
     def mark_obstacles_with_inflation(self, floor_mask):
         """
@@ -527,25 +567,38 @@ class SegFormerNode(Node):
         return probs, 0.0
     
     def _upsample_and_transfer(self, probs, h, w):
-        """Transfer floor classes at model resolution, then upsample on CPU."""
+        """Transfer floor and wall classes at model resolution, then upsample on CPU."""
         if self.profile_timing:
             t_upsample_start = time.perf_counter()
         
         # OPTIMIZATION: Transfer small data (512×512), then upsample on CPU
-        # Extract only floor classes at model resolution (512×512)
+        # Extract floor and wall classes at model resolution (512×512)
         probs_np = probs[0].cpu().numpy()  # Shape: (150, 512, 512) or smaller
+        
+        # Get floor classes
         floor_probs_small = probs_np[self.floor_ids] if self.floor_ids else probs_np[:1]  # (5, 512, 512)
         
-        # Upsample to full resolution on CPU using OpenCV (fast and efficient)
+        # Get wall classes
+        wall_probs_small = probs_np[self.wall_ids] if self.wall_ids else np.zeros((1, probs_np.shape[1], probs_np.shape[2]), dtype=np.float32)
+        
+        # Upsample floor classes to full resolution on CPU using OpenCV (fast and efficient)
         floor_probs_upsampled = []
         for floor_prob in floor_probs_small:
             upsampled = cv2.resize(floor_prob, (w, h), interpolation=cv2.INTER_LINEAR)
             floor_probs_upsampled.append(upsampled)
         
-        # Create full probs_up array (sparse, only floor classes populated)
+        # Upsample wall classes to full resolution on CPU
+        wall_probs_upsampled = []
+        for wall_prob in wall_probs_small:
+            upsampled = cv2.resize(wall_prob, (w, h), interpolation=cv2.INTER_LINEAR)
+            wall_probs_upsampled.append(upsampled)
+        
+        # Create full probs_up array (sparse, only floor and wall classes populated)
         probs_up = np.zeros((probs_np.shape[0], h, w), dtype=np.float32)
         for i, fid in enumerate(self.floor_ids):
             probs_up[fid] = floor_probs_upsampled[i]
+        for i, wid in enumerate(self.wall_ids):
+            probs_up[wid] = wall_probs_upsampled[i]
         
         if self.profile_timing:
             t_upsample = (time.perf_counter() - t_upsample_start) * 1000
@@ -559,6 +612,19 @@ class SegFormerNode(Node):
         mask = np.zeros((h, w), dtype=np.uint8)
         for fid in self.floor_ids:
             mask = np.logical_or(mask, probs_up[fid] > self.prob_threshold)
+        mask = mask.astype(np.uint8) * 255
+        if self.profile_timing:
+            t_mask_create = (time.perf_counter() - t_mask_start) * 1000
+            return mask, t_mask_create
+        return mask, 0.0
+    
+    def _create_wall_mask(self, probs_up, h, w):
+        """Create binary wall mask from probabilities."""
+        if self.profile_timing:
+            t_mask_start = time.perf_counter()
+        mask = np.zeros((h, w), dtype=np.uint8)
+        for wid in self.wall_ids:
+            mask = np.logical_or(mask, probs_up[wid] > self.prob_threshold)
         mask = mask.astype(np.uint8) * 255
         if self.profile_timing:
             t_mask_create = (time.perf_counter() - t_mask_start) * 1000
@@ -590,12 +656,15 @@ class SegFormerNode(Node):
             return mask, t_cc
         return mask, 0.0
     
-    def _create_overlay_image(self, frame, mask):
-        """Create visualization overlay with floor highlighted."""
+    def _create_overlay_image(self, frame, floor_mask, wall_mask):
+        """Create visualization overlay with floor highlighted in green and walls in blue."""
         if self.profile_timing:
             t_overlay_start = time.perf_counter()
         overlay = frame.copy()
-        overlay[mask > 0] = (0, 255, 0)
+        # Draw walls in blue
+        overlay[wall_mask > 0] = (255, 0, 0)  # Blue (BGR format)
+        # Draw floor in green (overrides walls if overlap)
+        overlay[floor_mask > 0] = (0, 255, 0)  # Green (BGR format)
         if self.profile_timing:
             t_overlay_create = (time.perf_counter() - t_overlay_start) * 1000
             return overlay, t_overlay_create
@@ -761,6 +830,114 @@ class SegFormerNode(Node):
             self._model_acc = 0.0
             self._postproc_acc = 0.0
 
+    def build_bev_map(self, floor_mask, wall_mask):
+        """
+        Build Bird's Eye View map by simply rotating the camera view masks.
+        No complex transformations - just flip to create top-down perspective.
+        
+        Args:
+            floor_mask: Binary floor mask (H×W) from camera view
+            wall_mask: Binary wall mask (H×W) from camera view
+            
+        Returns:
+            bev_floor: BEV floor map (bev_pixels × bev_pixels)
+            bev_wall: BEV wall map (bev_pixels × bev_pixels)
+            elapsed_ms: Time taken in milliseconds
+        """
+        start_time = time.perf_counter()
+        
+        h, w = floor_mask.shape
+        
+        # Simple approach: Take bottom portion of the image (ground area)
+        # and resize to BEV grid size
+        # Bottom of camera view = close to robot, top = far from robot
+        
+        # Take full image and resize to BEV size
+        bev_floor = cv2.resize(floor_mask, (self.bev_pixels, self.bev_pixels), 
+                               interpolation=cv2.INTER_LINEAR)
+        bev_wall = cv2.resize(wall_mask, (self.bev_pixels, self.bev_pixels), 
+                             interpolation=cv2.INTER_LINEAR)
+        
+        # Threshold to ensure binary masks
+        bev_floor = (bev_floor > 127).astype(np.uint8) * 255
+        bev_wall = (bev_wall > 127).astype(np.uint8) * 255
+        
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        
+        return bev_floor, bev_wall, elapsed_ms
+
+    def raycast_direction(self, bev_floor, bev_wall, angle_deg):
+        """
+        Cast a ray from robot position along specified direction to find free travel distance.
+        Simplified to cast single ray from robot center (no footprint offset for now).
+        
+        Args:
+            bev_floor: BEV floor mask (bev_pixels × bev_pixels)
+            bev_wall: BEV wall mask (bev_pixels × bev_pixels)
+            angle_deg: Direction angle in degrees (-30 to +30, 0=forward)
+            
+        Returns:
+            free_distance: Maximum safe travel distance in meters
+        """
+        # Robot is at bottom-center of BEV
+        robot_x = self.bev_pixels // 2  # Center horizontally
+        robot_y = self.bev_pixels - 1   # Bottom row
+        
+        # Convert angle to radians and create direction vector
+        angle_rad = np.deg2rad(angle_deg)
+        dx = np.sin(angle_rad)  # Horizontal component
+        dy = -np.cos(angle_rad)  # Vertical component (negative because y increases downward)
+        
+        # March along ray from robot position
+        distance = 0.0
+        step_size = 1  # pixels
+        max_steps = int(self.bev_size_meters / self.bev_resolution)
+        
+        for step in range(1, max_steps + 1):  # Start from 1 to move away from robot
+            # Current position along ray
+            curr_x = int(robot_x + dx * step * step_size)
+            curr_y = int(robot_y + dy * step * step_size)
+            
+            # Check bounds
+            if not (0 <= curr_x < self.bev_pixels and 0 <= curr_y < self.bev_pixels):
+                break
+            
+            # Check for obstacles (wall or non-floor)
+            if bev_wall[curr_y, curr_x] > 0 or bev_floor[curr_y, curr_x] == 0:
+                break
+            
+            # Update distance (successful step)
+            distance = step * step_size * self.bev_resolution
+        
+        return distance
+    
+    def sample_directions_and_raycast(self, bev_floor, bev_wall):
+        """
+        Sample 5 directions and raycast to find free distance for each.
+        
+        Args:
+            bev_floor: BEV floor mask
+            bev_wall: BEV wall mask
+            
+        Returns:
+            angles: List of 5 angles in degrees [-30, -15, 0, 15, 30]
+            free_distances: List of 5 free distances in meters
+            elapsed_ms: Time taken in milliseconds
+        """
+        start_time = time.perf_counter()
+        
+        # Sample 5 directions: -30°, -15°, 0°, +15°, +30°
+        angles = [-30, -15, 0, 15, 30]
+        free_distances = []
+        
+        for angle in angles:
+            distance = self.raycast_direction(bev_floor, bev_wall, angle)
+            free_distances.append(distance)
+        
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+        
+        return angles, free_distances, elapsed_ms
+
     def image_cb(self, msg: Image):
         """Main callback for processing incoming camera images."""
         try:
@@ -780,18 +957,119 @@ class SegFormerNode(Node):
 
             if self.floor_ids:
                 # Step 2: Create and refine floor mask
-                mask, t_mask_create = self._create_floor_mask(probs_up, h, w)
-                mask, t_morph = self._apply_morphology(mask)
-                mask, t_cc = self._filter_by_area(mask)
+                floor_mask, t_mask_create = self._create_floor_mask(probs_up, h, w)
+                floor_mask, t_morph = self._apply_morphology(floor_mask)
+                floor_mask, t_cc = self._filter_by_area(floor_mask)
                 
-                # Step 3: Publish mask
-                mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
+                # Step 2b: Create wall mask
+                wall_mask, t_wall_mask_create = self._create_wall_mask(probs_up, h, w)
+                # Optionally apply morphology to wall mask too for cleaner detection
+                wall_mask, t_wall_morph = self._apply_morphology(wall_mask)
+                
+                # Step 3: Publish masks
+                mask_msg = self.bridge.cv2_to_imgmsg(floor_mask, encoding='mono8')
                 mask_msg.header = msg.header
                 self.mask_pub.publish(mask_msg)
                 
-                # Step 4: Create overlay and detect obstacles
-                overlay, t_overlay_create = self._create_overlay_image(frame, mask)
-                obstacle_overlay, costmap, obstacle_time = self._detect_obstacles(mask, h, w)
+                wall_mask_msg = self.bridge.cv2_to_imgmsg(wall_mask, encoding='mono8')
+                wall_mask_msg.header = msg.header
+                self.wall_mask_pub.publish(wall_mask_msg)
+                
+                # Step 3.5: Build BEV map
+                if self.enable_bev and self.profile_timing:
+                    t_bev_start = time.perf_counter()
+                
+                if self.enable_bev:
+                    bev_floor, bev_wall, bev_time = self.build_bev_map(floor_mask, wall_mask)
+                    
+                    # Sample directions and raycast
+                    angles, free_distances, raycast_time = self.sample_directions_and_raycast(bev_floor, bev_wall)
+                    
+                    # Debug: log the distances
+                    self.get_logger().info(f'Ray distances: P1={free_distances[0]:.2f}m, P2={free_distances[1]:.2f}m, P3={free_distances[2]:.2f}m, P4={free_distances[3]:.2f}m, P5={free_distances[4]:.2f}m')
+                    
+                    # Create colored BEV visualization
+                    # Floor = Green, Wall = Blue, Unknown = Black
+                    bev_viz = np.zeros((self.bev_pixels, self.bev_pixels, 3), dtype=np.uint8)
+                    bev_viz[bev_floor > 0] = (0, 255, 0)  # Green for floor
+                    bev_viz[bev_wall > 0] = (255, 0, 0)  # Blue for walls (BGR)
+                    
+                    # Draw robot position and orientation at bottom-center
+                    # Robot is at bottom-center of BEV, facing upward (forward)
+                    robot_x = self.bev_pixels // 2  # Center horizontally
+                    robot_y = self.bev_pixels - 1   # Bottom row
+                    
+                    # Draw the 5 candidate paths/rays
+                    # Use different colors for each ray to make them visible
+                    ray_colors = [
+                        (255, 0, 255),   # P1 (-30°): Magenta
+                        (255, 100, 0),   # P2 (-15°): Blue
+                        (0, 255, 255),   # P3 (0°):   Cyan (forward) - changed from green to avoid floor confusion
+                        (0, 200, 255),   # P4 (+15°): Orange
+                        (0, 0, 255)      # P5 (+30°): Red
+                    ]
+                    
+                    for i, (angle, distance) in enumerate(zip(angles, free_distances)):
+                        # Convert angle and distance to endpoint
+                        angle_rad = np.deg2rad(angle)
+                        dx = np.sin(angle_rad)
+                        dy = -np.cos(angle_rad)
+                        
+                        # Calculate endpoint in pixels
+                        distance_px = int(distance / self.bev_resolution)
+                        end_x = int(robot_x + dx * distance_px)
+                        end_y = int(robot_y + dy * distance_px)
+                        
+                        # Clamp to bounds
+                        end_x = max(0, min(self.bev_pixels - 1, end_x))
+                        end_y = max(0, min(self.bev_pixels - 1, end_y))
+                        
+                        # Use unique color for each ray
+                        color = ray_colors[i]
+                        # Make lines thicker for visibility
+                        cv2.line(bev_viz, (robot_x, robot_y), (end_x, end_y), color, 3)
+                        
+                        # Draw endpoint circle
+                        cv2.circle(bev_viz, (end_x, end_y), 4, color, -1)
+                        
+                        # Add path label with distance
+                        label_x = end_x + 4
+                        label_y = end_y - 4
+                        cv2.putText(bev_viz, f"P{i+1}:{distance:.1f}m", (label_x, label_y), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+                    
+                    # Draw robot as triangle pointing forward (up in BEV)
+                    triangle_size = 4
+                    pts = np.array([
+                        [robot_x, robot_y - triangle_size],  # Front point (top)
+                        [robot_x - triangle_size//2, robot_y],  # Left back
+                        [robot_x + triangle_size//2, robot_y]   # Right back
+                    ], np.int32)
+                    cv2.fillPoly(bev_viz, [pts], (0, 255, 255))  # Yellow robot
+                    cv2.polylines(bev_viz, [pts], True, (0, 200, 200), 1)  # Border
+                    
+                    # Upscale for better visibility (60×60 → 300×300)
+                    bev_viz_large = cv2.resize(bev_viz, (300, 300), interpolation=cv2.INTER_NEAREST)
+                    
+                    # Add text overlay
+                    cv2.putText(bev_viz_large, f"BEV ({self.bev_size_meters}m x {self.bev_size_meters}m)", 
+                               (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+                    cv2.putText(bev_viz_large, "Robot", 
+                               (130, 290), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+                    
+                    # Publish BEV map
+                    bev_msg = self.bridge.cv2_to_imgmsg(bev_viz_large, encoding='bgr8')
+                    bev_msg.header = msg.header
+                    bev_msg.header.frame_id = "base_link"  # BEV is in robot frame
+                    self.bev_map_pub.publish(bev_msg)
+                    
+                    if self.profile_timing:
+                        t_bev_total = (time.perf_counter() - t_bev_start) * 1000
+                        self.get_logger().info(f'  BEV: build={bev_time:.1f}ms, raycast={raycast_time:.1f}ms, total={t_bev_total:.1f}ms')
+                
+                # Step 4: Create overlay with both floor and walls, then detect obstacles
+                overlay, t_overlay_create = self._create_overlay_image(frame, floor_mask, wall_mask)
+                obstacle_overlay, costmap, obstacle_time = self._detect_obstacles(floor_mask, h, w)
                 
                 # Blend obstacle overlay with main overlay
                 if self.enable_obstacle_detection and self.enable_drawing:
@@ -809,7 +1087,7 @@ class SegFormerNode(Node):
                     t_centroid_start = time.perf_counter()
                 
                 total_start = time.time()
-                M = cv2.moments(mask)
+                M = cv2.moments(floor_mask)
                 if M['m00'] > 0:
                     cx = int(M['m10'] / M['m00'])
                     cy = int(M['m01'] / M['m00'])
@@ -821,7 +1099,7 @@ class SegFormerNode(Node):
                     for y in range(h - 1, -1, -1):
                         for dx in range(-search_width, search_width + 1):
                             x = start_x + dx
-                            if 0 <= x < w and mask[y, x] > 0:
+                            if 0 <= x < w and floor_mask[y, x] > 0:
                                 start_y = y
                                 start_x = x
                                 break
@@ -829,16 +1107,16 @@ class SegFormerNode(Node):
                             break
                     
                     # Find goal point
-                    goal_x, goal_y = self._find_navigation_goal(mask, cx, cy, h, w)
+                    goal_x, goal_y = self._find_navigation_goal(floor_mask, cx, cy, h, w)
                     
                     # Compute path
-                    path, path_time = self._compute_navigation_path(mask, start_x, start_y, goal_x, goal_y)
+                    path, path_time = self._compute_navigation_path(floor_mask, start_x, start_y, goal_x, goal_y)
                     
                     # Calculate total processing time
                     total_time = (time.time() - total_start) * 1000
                     
                     # Draw visualization
-                    self._draw_navigation_visualization(overlay, mask, path, start_x, start_y, 
+                    self._draw_navigation_visualization(overlay, floor_mask, path, start_x, start_y, 
                                                        cx, cy, goal_x, goal_y, 
                                                        obstacle_time, path_time, total_time)
                     
