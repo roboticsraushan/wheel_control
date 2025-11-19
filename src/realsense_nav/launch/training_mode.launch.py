@@ -198,6 +198,13 @@ def generate_launch_description():
         output='screen'
     )
     
+    # Rerun visualization bridge (displays BEV map and RGB path overlay)
+    rerun_bridge_script = os.path.join(os.getcwd(), 'src', 'realsense_nav', 'tools', 'rerun_bridge.py')
+    rerun_bridge_process = ExecuteProcess(
+        cmd=['/usr/bin/env', 'python3', rerun_bridge_script],
+        output='screen'
+    )
+    
     # Visualization node (world viewer)
     view_world_node = Node(
         package='realsense_nav',
@@ -314,10 +321,11 @@ def generate_launch_description():
         # odometry_node,
         # vo_bridge_process,
         segformer_node,
+        rerun_bridge_process,
         # floorplan_manager_process,
         # map_loader_process,
         # initial_pose_process,
-        view_world_node,
+        # view_world_node,
         # semantic_visualizer_node,
         # static_tf_node,
         # Ensure the RealSense IR emitter is disabled after the camera node has started.

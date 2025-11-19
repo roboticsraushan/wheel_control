@@ -40,11 +40,11 @@ class SegFormerNode(Node):
         self.declare_parameter('model_name', 'nvidia/segformer-b1-finetuned-ade-512-512')
         self.declare_parameter('local_model_dir', '/home/raushan/control_one/wheel_control/src/segmentation/models/segformer-b1-finetuned-ade-512-512')
         self.declare_parameter('allow_download', False)
-        self.declare_parameter('prob_threshold', 0.05)
+        self.declare_parameter('prob_threshold', 0.7)
         self.declare_parameter('min_area', 500)
         self.declare_parameter('morph_kernel', 55)
         self.declare_parameter('robot_footprint_size', 0.4)  # 40cm in meters
-        self.declare_parameter('pixels_per_meter', 200.0)  # Approximate scaling factor
+        self.declare_parameter('pixels_per_meter', 50000.0)  # Approximate scaling factor
         self.declare_parameter('obstacle_inflation_radius', 0.3)  # 30cm safety margin in meters
         self.declare_parameter('cost_scaling_factor', 5.0)  # How much to penalize near-obstacle paths (higher = more curve)
         self.declare_parameter('enable_obstacle_detection', False)
@@ -117,7 +117,7 @@ class SegFormerNode(Node):
 
         # BEV parameters
         self.declare_parameter('enable_bev', True)
-        self.declare_parameter('bev_size_meters', 3.0)  # 3m × 3m
+        self.declare_parameter('bev_size_meters', 6.0)  # 3m × 3m
         self.declare_parameter('bev_resolution', 0.005)  # 0.5cm per pixel (higher resolution) Raushan, change it later to optimize calculation
         self.declare_parameter('camera_height', 0.5)  # 50cm above ground
         self.declare_parameter('camera_tilt_deg', 15.0)  # 15 degrees downward tilt
@@ -150,8 +150,10 @@ class SegFormerNode(Node):
         if self.enable_bev:
             self.bev_map_pub = self.create_publisher(Image, '/segmentation/bev_map', 10)
             self.local_goal_pub = self.create_publisher(PointStamped, '/segmentation/local_goal', 10)
+            self.rgb_path_overlay_pub = self.create_publisher(Image, '/segmentation/rgb_path_overlay', 10)
             self.get_logger().info('BEV map publisher created on /segmentation/bev_map')
             self.get_logger().info('Local goal publisher created on /segmentation/local_goal')
+            self.get_logger().info('RGB path overlay publisher created on /segmentation/rgb_path_overlay')
 
         # load model (local-first)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -987,11 +989,11 @@ class SegFormerNode(Node):
                 
                 if 0 <= check_x < self.bev_pixels and 0 <= check_y < self.bev_pixels:
                     if bev_wall[check_y, check_x] > 0:
-                        frontier_score = 0.2  # Hit wall - less interesting
+                        frontier_score = 0.1  # Hit wall - less interesting
                     elif bev_floor[check_y, check_x] == 0:
                         frontier_score = 1.0  # Hit unknown - explore!
                     else:
-                        frontier_score = 0.5  # Still on floor
+                        frontier_score = 0.1  # Still on floor
                 else:
                     frontier_score = 0.8  # Out of bounds - potential exploration
             else:
@@ -1000,8 +1002,8 @@ class SegFormerNode(Node):
             # 4. Combined score with weights
             # Distance: 50%, Smoothness: 30%, Frontier: 20%
             combined_score = (0.5 * distance_score + 
-                            0.3 * smoothness_score + 
-                            0.2 * frontier_score)
+                            0.1 * smoothness_score + 
+                            0.4 * frontier_score)
             
             scores.append(combined_score)
         
@@ -1009,6 +1011,118 @@ class SegFormerNode(Node):
         best_idx = int(np.argmax(scores)) if scores else 0
         
         return scores, best_idx
+
+    def _create_rgb_path_overlay(self, frame, floor_mask, angles, free_distances, scores, best_idx, 
+                                   goal_x, goal_y, best_distance):
+        """
+        Create RGB camera overlay showing A* planned path to goal.
+        Raycasting is used only for decision making (selecting goal), not for display.
+        
+        Args:
+            frame: Original RGB camera image
+            floor_mask: Floor segmentation mask for A* path planning
+            angles: List of path angles in degrees (for goal selection only)
+            free_distances: List of free distances for each path (in meters)
+            scores: List of path scores
+            best_idx: Index of best path
+            goal_x: Goal X coordinate in base_link frame (meters)
+            goal_y: Goal Y coordinate in base_link frame (meters)
+            best_distance: Free distance of best path (meters)
+            
+        Returns:
+            overlay: RGB image with A* path and goal visualization
+        """
+        overlay = frame.copy()
+        h, w = overlay.shape[:2]
+        
+        # Robot position (bottom center of image)
+        robot_img_x = w // 2
+        robot_img_y = h - 1
+        
+        # Project goal from base_link (meters) to image coordinates
+        # Using simple perspective projection:
+        # - Y (lateral) maps to horizontal displacement
+        # - X (forward) maps to vertical position (larger X = higher in image)
+        
+        # Scale factors (approximate, tune as needed)
+        pixels_per_meter_x = h / self.bev_size_meters  # Forward direction
+        pixels_per_meter_y = w / (self.bev_size_meters * 1.5)  # Lateral direction (wider FOV)
+        
+        # Calculate goal position in image
+        # X (forward) moves up in image, Y (lateral) moves horizontally
+        goal_img_x = int(robot_img_x + goal_y * pixels_per_meter_y)
+        goal_img_y = int(robot_img_y - goal_x * pixels_per_meter_x)
+        
+        # Clamp to image bounds
+        goal_img_x = max(0, min(w - 1, goal_img_x))
+        goal_img_y = max(0, min(h - 1, goal_img_y))
+        
+        # Use A* to plan path from robot to goal on floor mask
+        start = (robot_img_x, robot_img_y)
+        end = (goal_img_x, goal_img_y)
+        
+        path = self.find_floor_path(floor_mask, start, end)
+        
+        # Draw A* path
+        if len(path) > 1:
+            # Draw path as thick green line
+            for i in range(len(path) - 1):
+                pt1 = path[i]
+                pt2 = path[i + 1]
+                
+                # Gradient color from yellow (start) to green (end)
+                progress = i / (len(path) - 1)
+                color_b = int(0)
+                color_g = int(255)
+                color_r = int((1 - progress) * 255)  # Yellow to green
+                color = (color_b, color_g, color_r)
+                
+                # Draw with transparency
+                temp_overlay = overlay.copy()
+                cv2.line(temp_overlay, pt1, pt2, color, 4)
+                cv2.addWeighted(temp_overlay, 0.7, overlay, 0.3, 0, overlay)
+            
+            # Draw waypoint markers along path
+            step = max(1, len(path) // 10)  # Show ~10 waypoints
+            for i in range(0, len(path), step):
+                pt = path[i]
+                cv2.circle(overlay, pt, 3, (0, 255, 0), -1)
+                cv2.circle(overlay, pt, 4, (255, 255, 255), 1)
+        
+        # Draw goal marker: large green circle with cross
+        cv2.circle(overlay, (goal_img_x, goal_img_y), 20, (0, 255, 0), 3)
+        cv2.drawMarker(overlay, (goal_img_x, goal_img_y), (0, 255, 0), 
+                      cv2.MARKER_CROSS, 30, 4)
+        
+        # Add goal label
+        goal_label = f"GOAL"
+        goal_coords = f"({goal_x:.2f}, {goal_y:.2f})m"
+        cv2.putText(overlay, goal_label, (goal_img_x + 25, goal_img_y - 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(overlay, goal_coords, (goal_img_x + 25, goal_img_y + 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1, cv2.LINE_AA)
+        
+        # Draw robot indicator at bottom
+        cv2.circle(overlay, (robot_img_x, robot_img_y), 10, (0, 255, 255), -1)
+        cv2.circle(overlay, (robot_img_x, robot_img_y), 11, (255, 255, 255), 2)
+        cv2.putText(overlay, "ROBOT", (robot_img_x - 30, robot_img_y - 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2, cv2.LINE_AA)
+        
+        # Add info panel at top
+        panel_height = 90
+        panel = overlay[0:panel_height, :].copy()
+        panel = cv2.addWeighted(panel, 0.3, np.zeros_like(panel), 0.7, 0)
+        overlay[0:panel_height, :] = panel
+        
+        # Add text info
+        cv2.putText(overlay, "A* Path Planning to Raycasting Goal", (10, 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(overlay, f"Best Direction: P{best_idx+1} | Score: {scores[best_idx]:.2f} | Distance: {best_distance:.2f}m", 
+                   (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(overlay, f"Goal: ({goal_x:.2f}, {goal_y:.2f})m | Path: {len(path)} waypoints", 
+                   (10, 72), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+        
+        return overlay
 
     def image_cb(self, msg: Image):
         """Main callback for processing incoming camera images."""
@@ -1062,7 +1176,7 @@ class SegFormerNode(Node):
                     
                     # Debug: log the distances and scores
                     score_str = ', '.join([f'P{i+1}={scores[i]:.2f}' for i in range(len(scores))])
-                    self.get_logger().info(f'Path scores: {score_str}, Best: P{best_idx+1}')
+                    # self.get_logger().info(f'Path scores: {score_str}, Best: P{best_idx+1}')
                     
                     # Compute and publish goal point for best path
                     best_angle = angles[best_idx]
@@ -1190,6 +1304,16 @@ class SegFormerNode(Node):
                     bev_msg.header = msg.header
                     bev_msg.header.frame_id = "base_link"  # BEV is in robot frame
                     self.bev_map_pub.publish(bev_msg)
+                    
+                    # Create RGB overlay with A* path to goal
+                    rgb_overlay = self._create_rgb_path_overlay(
+                        frame, floor_mask, angles, free_distances, scores, best_idx, 
+                        goal_x, goal_y, best_distance
+                    )
+                    rgb_overlay_msg = self.bridge.cv2_to_imgmsg(rgb_overlay, encoding='bgr8')
+                    rgb_overlay_msg.header = msg.header
+                    rgb_overlay_msg.header.frame_id = "camera_color_optical_frame"
+                    self.rgb_path_overlay_pub.publish(rgb_overlay_msg)
                     
                     if self.profile_timing:
                         t_bev_total = (time.perf_counter() - t_bev_start) * 1000
