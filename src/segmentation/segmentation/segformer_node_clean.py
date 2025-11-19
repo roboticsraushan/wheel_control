@@ -917,21 +917,22 @@ class SegFormerNode(Node):
     
     def sample_directions_and_raycast(self, bev_floor, bev_wall):
         """
-        Sample 5 directions and raycast to find free distance for each.
+    Sample N directions (default 15) and raycast to find free distance for each.
         
         Args:
             bev_floor: BEV floor mask
             bev_wall: BEV wall mask
             
         Returns:
-            angles: List of 5 angles in degrees [-30, -15, 0, 15, 30]
-            free_distances: List of 5 free distances in meters
+            angles: List of angles in degrees (samples across -30 to +30)
+            free_distances: List of free distances in meters for each angle
             elapsed_ms: Time taken in milliseconds
         """
         start_time = time.perf_counter()
         
-        # Sample 5 directions: -30°, -15°, 0°, +15°, +30°
-        angles = [-30, -15, 0, 15, 30]
+        # Sample directions evenly across [-30deg, +30deg]
+        num_rays = 15
+        angles = list(np.linspace(-30.0, 30.0, num_rays))
         free_distances = []
         
         for angle in angles:
@@ -1182,8 +1183,8 @@ class SegFormerNode(Node):
                     best_angle = angles[best_idx]
                     best_distance = free_distances[best_idx]
                     
-                    # Place goal at 50% of free distance
-                    goal_distance = 0.5 * best_distance
+                    # Place goal at 80% of free distance
+                    goal_distance = 0.8 * best_distance
                     
                     # Convert to Cartesian coordinates (robot-centric, base_link frame)
                     # In base_link: x=forward, y=left, z=up
@@ -1211,7 +1212,7 @@ class SegFormerNode(Node):
                     robot_x = self.bev_pixels // 2  # Center horizontally
                     robot_y = self.bev_pixels - 1   # Bottom row
                     
-                    # Draw the 5 candidate paths/rays with color-coded scores
+                    # Draw the candidate paths/rays with color-coded scores (N rays)
                     for i, (angle, distance, score) in enumerate(zip(angles, free_distances, scores)):
                         # Convert angle and distance to endpoint
                         angle_rad = np.deg2rad(angle)
@@ -1249,20 +1250,32 @@ class SegFormerNode(Node):
                             thickness = 2
                             radius = 3
                         
-                        # Draw ray
+                        # Draw ray with a thin black outline for visibility on any background
+                        border_thickness = max(1, thickness + 2)
+                        cv2.line(bev_viz, (robot_x, robot_y), (end_x, end_y), (0, 0, 0), border_thickness)
                         cv2.line(bev_viz, (robot_x, robot_y), (end_x, end_y), color, thickness)
-                        
-                        # Draw endpoint circle
+
+                        # Draw endpoint circle with black border so it stands out on green floor
+                        cv2.circle(bev_viz, (end_x, end_y), radius + 2, (0, 0, 0), -1)
                         cv2.circle(bev_viz, (end_x, end_y), radius, color, -1)
                         
-                        # Add path label with score
+                        # Add path label with score (draw black background for contrast)
                         label_x = end_x + 5
                         label_y = end_y - 5
                         label_text = f"P{i+1}:{score:.2f}"
+                        (txt_w, txt_h), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.25, 1)
+                        rect_tl = (max(0, label_x - 2), max(0, label_y - txt_h - 2))
+                        rect_br = (min(self.bev_pixels - 1, label_x + txt_w + 2), min(self.bev_pixels - 1, label_y + 4))
+                        cv2.rectangle(bev_viz, rect_tl, rect_br, (0, 0, 0), -1)
+                        cv2.putText(bev_viz, label_text, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
                         if i == best_idx:
                             label_text = f"*{label_text}"  # Mark best with asterisk
-                        cv2.putText(bev_viz, label_text, (label_x, label_y), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.25, (255, 255, 255), 1)
+                        # Put white text on the black rectangle (already drawn above)
+                        # Text already drawn in block above; update to reflect best flag
+                        if i == best_idx:
+                            # Draw a slightly larger rectangle for best label
+                            cv2.rectangle(bev_viz, rect_tl, rect_br, (0, 0, 0), -1)
+                            cv2.putText(bev_viz, label_text, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.25, (0, 255, 255), 1)
                     
                     # Draw robot as triangle pointing forward (up in BEV)
                     triangle_size = 4
