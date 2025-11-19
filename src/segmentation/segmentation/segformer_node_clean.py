@@ -7,10 +7,29 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import Point
 from std_msgs.msg import Bool, Float32
 from cv_bridge import CvBridge
-import cv2
-import numpy as np
-import torch
-from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
+import time
+try:
+    import cv2  # type: ignore
+except Exception:
+    cv2 = None
+try:
+    import numpy as np  # type: ignore
+except Exception:
+    np = None
+try:
+    import torch  # type: ignore
+except Exception:
+    torch = None
+try:
+    from transformers import AutoImageProcessor, SegformerForSemanticSegmentation  # type: ignore
+except Exception:
+    AutoImageProcessor = None
+    SegformerForSemanticSegmentation = None
+try:
+    from scipy.interpolate import splprep, splev  # type: ignore
+except Exception:
+    splprep = None
+    splev = None
 
 
 class SegFormerNode(Node):
@@ -21,13 +40,28 @@ class SegFormerNode(Node):
         self.declare_parameter('model_name', 'nvidia/segformer-b1-finetuned-ade-512-512')
         self.declare_parameter('local_model_dir', '/home/raushan/control_one/wheel_control/src/segmentation/models/segformer-b1-finetuned-ade-512-512')
         self.declare_parameter('allow_download', False)
-        self.declare_parameter('prob_threshold', 0.5)
-        self.declare_parameter('min_area', 5000)
-        self.declare_parameter('morph_kernel', 5)
+        self.declare_parameter('prob_threshold', 0.05)
+        self.declare_parameter('min_area', 500)
+        self.declare_parameter('morph_kernel', 55)
         self.declare_parameter('robot_footprint_size', 0.4)  # 40cm in meters
         self.declare_parameter('pixels_per_meter', 200.0)  # Approximate scaling factor
         self.declare_parameter('obstacle_inflation_radius', 0.3)  # 30cm safety margin in meters
         self.declare_parameter('cost_scaling_factor', 5.0)  # How much to penalize near-obstacle paths (higher = more curve)
+        self.declare_parameter('enable_obstacle_detection', False)
+        self.declare_parameter('enable_pathfinding', False)
+        self.declare_parameter('enable_smoothing', False)
+        self.declare_parameter('enable_centroid_search', False)
+        self.declare_parameter('enable_drawing', False)
+        self.declare_parameter('frame_skip', 1)  # process every Nth frame
+        self.declare_parameter('inference_size', 512)  # resize short edge to this (square) for faster inference
+        self.declare_parameter('use_amp', False)  # enable mixed precision autocast when on CUDA
+        self.declare_parameter('cudnn_benchmark', True)  # enable torch.backends.cudnn.benchmark
+        # Toggle frame skipping on/off
+        self.declare_parameter('enable_frame_skip', True)
+        # Show framerate in logs
+        self.declare_parameter('show_fps', True)
+        # Enable detailed timing for debugging bottlenecks
+        self.declare_parameter('profile_timing', True)
 
         self.model_name = self.get_parameter('model_name').value
         self.local_model_dir = self.get_parameter('local_model_dir').value
@@ -39,8 +73,47 @@ class SegFormerNode(Node):
         self.pixels_per_meter = float(self.get_parameter('pixels_per_meter').value)
         self.obstacle_inflation_radius = float(self.get_parameter('obstacle_inflation_radius').value)
         self.cost_scaling_factor = float(self.get_parameter('cost_scaling_factor').value)
+        self.enable_obstacle_detection = bool(self.get_parameter('enable_obstacle_detection').value)
+        self.enable_pathfinding = bool(self.get_parameter('enable_pathfinding').value)
+        self.enable_smoothing = bool(self.get_parameter('enable_smoothing').value)
+        self.enable_centroid_search = bool(self.get_parameter('enable_centroid_search').value)
+        self.enable_drawing = bool(self.get_parameter('enable_drawing').value)
+        if not self.enable_obstacle_detection:
+            self.get_logger().info('Obstacle detection is disabled; obstacle inflation will be skipped')
+        if not self.enable_pathfinding:
+            self.get_logger().info('Pathfinding (A*) is disabled; skipping find_floor_path')
+        if not self.enable_smoothing:
+            self.get_logger().info('Smoothing (SciPy) is disabled; create_smooth_path will return raw path')
+        if not self.enable_centroid_search:
+            self.get_logger().info('Centroid search is disabled; nested ring search around centroid will be skipped')
+        if not self.enable_drawing:
+            self.get_logger().info('Drawing is disabled; overlay and path drawings are skipped')
 
         self.bridge = CvBridge()
+        # throughput tuning state
+        self.frame_skip = int(self.get_parameter('frame_skip').value)
+        self.frame_counter = 0
+        self.inference_size = int(self.get_parameter('inference_size').value) if self.get_parameter('inference_size').value else None
+        self.use_amp = bool(self.get_parameter('use_amp').value)
+        self.use_cudnn_benchmark = bool(self.get_parameter('cudnn_benchmark').value)
+        self.enable_frame_skip = bool(self.get_parameter('enable_frame_skip').value)
+        self.show_fps = bool(self.get_parameter('show_fps').value)
+        if torch.cuda.is_available() and self.use_cudnn_benchmark:
+            torch.backends.cudnn.benchmark = True
+
+        self.get_logger().info(
+            f'Frame skip={self.frame_skip}, enable_frame_skip={self.enable_frame_skip}, inference_size={self.inference_size}, use_amp={self.use_amp}, cudnn_benchmark={self.use_cudnn_benchmark}, show_fps={self.show_fps}'
+        )
+        # FPS measurement state
+        self.last_frame_time = None
+        self.frame_processed_count = 0
+        self.fps_ema = 0.0
+        # profiling
+        self.profile_timing = bool(self.get_parameter('profile_timing').value)
+        self._preproc_acc = 0.0
+        self._model_acc = 0.0
+        self._postproc_acc = 0.0
+        self._profile_count = 0
 
         # pubs/subs
         self.image_sub = self.create_subscription(Image, '/camera/camera/color/image_raw', self.image_cb, 2)
@@ -82,6 +155,22 @@ class SegFormerNode(Node):
                 self.model = SegformerForSemanticSegmentation.from_pretrained(str(model_path), local_files_only=True).to(self.device)
                 loaded = True
                 self.get_logger().info(f'Loaded model from {model_path}')
+                # Warm up GPU / allocator and optionally FP16
+                try:
+                    self.model.eval()
+                    if self.inference_size:
+                        dummy = torch.randn(1, 3, self.inference_size, self.inference_size).to(self.device)
+                    else:
+                        dummy = torch.randn(1, 3, 512, 512).to(self.device)
+                    with torch.no_grad():
+                        if self.use_amp and self.device.type == 'cuda':
+                            with torch.cuda.amp.autocast():
+                                _ = self.model(pixel_values=dummy)
+                        else:
+                            _ = self.model(pixel_values=dummy)
+                except Exception:
+                    # Warmup is best-effort; continue even if it fails
+                    pass
             except Exception as e:
                 self.get_logger().warn(f'Local load failed: {e}')
 
@@ -114,7 +203,6 @@ class SegFormerNode(Node):
         Only processes within 1 meter range for performance.
         Returns: (overlay_mask, costmap, elapsed_time_ms)
         """
-        import time
         start_time = time.time()
         
         h, w = floor_mask.shape
@@ -299,7 +387,13 @@ class SegFormerNode(Node):
         Create a smooth curvy path using cubic spline interpolation.
         Ensures the smoothed path still stays on floor pixels.
         """
-        from scipy.interpolate import splprep, splev
+        # Allow runtime disabling of smoothing
+        if not getattr(self, 'enable_smoothing', True):
+            return path
+
+        # SciPy interpolation may not be available in all environments
+        if splprep is None or splev is None:
+            return path
         
         if len(path) < 3:
             return path
@@ -324,7 +418,7 @@ class SegFormerNode(Node):
         
         try:
             # Create cubic B-spline
-            tck, u = splprep([x_sampled, y_sampled], s=len(x_sampled) * 10, k=min(3, len(x_sampled) - 1))
+            tck, u = splprep([x_sampled, y_sampled], s=0, k=min(3, len(x_sampled) - 1))
             
             # Generate smooth curve with many points
             u_fine = np.linspace(0, 1, len(path) * 2)
@@ -400,62 +494,329 @@ class SegFormerNode(Node):
                     arrow_end = (int(x + dx * half_size * 0.7), int(y + dy * half_size * 0.7))
                     cv2.arrowedLine(overlay, (x, y), arrow_end, (255, 255, 255), 2, tipLength=0.4)
 
+    def _preprocess_frame(self, frame):
+        """Preprocess frame for model inference."""
+        h, w = frame.shape[:2]
+        proc_img = frame
+        if self.inference_size and (self.inference_size != min(h, w)):
+            proc_img = cv2.resize(frame, (self.inference_size, self.inference_size), interpolation=cv2.INTER_AREA)
+        
+        if self.profile_timing:
+            t0 = time.perf_counter()
+        inputs = self.processor(images=proc_img, return_tensors='pt')
+        pix = inputs['pixel_values'].to(self.device)
+        if self.profile_timing:
+            t_preproc = time.perf_counter() - t0
+            return pix, t_preproc
+        return pix, 0.0
+    
+    def _run_inference(self, pix):
+        """Run model inference and return probabilities."""
+        if self.profile_timing:
+            t1 = time.perf_counter()
+        with torch.no_grad():
+            if self.use_amp and self.device.type == 'cuda':
+                with torch.cuda.amp.autocast():
+                    out = self.model(pixel_values=pix)
+            else:
+                out = self.model(pixel_values=pix)
+        probs = torch.softmax(out.logits, dim=1)
+        if self.profile_timing:
+            t_model = time.perf_counter() - t1
+            return probs, t_model
+        return probs, 0.0
+    
+    def _upsample_and_transfer(self, probs, h, w):
+        """Transfer floor classes at model resolution, then upsample on CPU."""
+        if self.profile_timing:
+            t_upsample_start = time.perf_counter()
+        
+        # OPTIMIZATION: Transfer small data (512×512), then upsample on CPU
+        # Extract only floor classes at model resolution (512×512)
+        probs_np = probs[0].cpu().numpy()  # Shape: (150, 512, 512) or smaller
+        floor_probs_small = probs_np[self.floor_ids] if self.floor_ids else probs_np[:1]  # (5, 512, 512)
+        
+        # Upsample to full resolution on CPU using OpenCV (fast and efficient)
+        floor_probs_upsampled = []
+        for floor_prob in floor_probs_small:
+            upsampled = cv2.resize(floor_prob, (w, h), interpolation=cv2.INTER_LINEAR)
+            floor_probs_upsampled.append(upsampled)
+        
+        # Create full probs_up array (sparse, only floor classes populated)
+        probs_up = np.zeros((probs_np.shape[0], h, w), dtype=np.float32)
+        for i, fid in enumerate(self.floor_ids):
+            probs_up[fid] = floor_probs_upsampled[i]
+        
+        if self.profile_timing:
+            t_upsample = (time.perf_counter() - t_upsample_start) * 1000
+            return probs_up, t_upsample
+        return probs_up, 0.0
+    
+    def _create_floor_mask(self, probs_up, h, w):
+        """Create binary floor mask from probabilities."""
+        if self.profile_timing:
+            t_mask_start = time.perf_counter()
+        mask = np.zeros((h, w), dtype=np.uint8)
+        for fid in self.floor_ids:
+            mask = np.logical_or(mask, probs_up[fid] > self.prob_threshold)
+        mask = mask.astype(np.uint8) * 255
+        if self.profile_timing:
+            t_mask_create = (time.perf_counter() - t_mask_start) * 1000
+            return mask, t_mask_create
+        return mask, 0.0
+    
+    def _apply_morphology(self, mask):
+        """Apply morphological operations to clean up the mask."""
+        if self.profile_timing:
+            t_morph_start = time.perf_counter()
+        kernel = np.ones((self.morph_kernel, self.morph_kernel), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        if self.profile_timing:
+            t_morph = (time.perf_counter() - t_morph_start) * 1000
+            return mask, t_morph
+        return mask, 0.0
+    
+    def _filter_by_area(self, mask):
+        """Filter out small connected components."""
+        if self.profile_timing:
+            t_cc_start = time.perf_counter()
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] < self.min_area:
+                mask[labels == i] = 0
+        if self.profile_timing:
+            t_cc = (time.perf_counter() - t_cc_start) * 1000
+            return mask, t_cc
+        return mask, 0.0
+    
+    def _create_overlay_image(self, frame, mask):
+        """Create visualization overlay with floor highlighted."""
+        if self.profile_timing:
+            t_overlay_start = time.perf_counter()
+        overlay = frame.copy()
+        overlay[mask > 0] = (0, 255, 0)
+        if self.profile_timing:
+            t_overlay_create = (time.perf_counter() - t_overlay_start) * 1000
+            return overlay, t_overlay_create
+        return overlay, 0.0
+    
+    def _detect_obstacles(self, mask, h, w):
+        """Detect and mark obstacles with inflation zones."""
+        total_start = time.time()
+        if self.enable_obstacle_detection:
+            obstacle_overlay, costmap, obstacle_time = self.mark_obstacles_with_inflation(mask)
+        else:
+            obstacle_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+            costmap = None
+            obstacle_time = 0.0
+        return obstacle_overlay, costmap, obstacle_time
+    
+    def _find_navigation_goal(self, mask, cx, cy, h, w):
+        """Find the navigation goal point on the floor."""
+        goal_x = cx
+        goal_y = cy
+        search_radius = 100
+        
+        if not (0 <= goal_x < w and 0 <= goal_y < h and mask[goal_y, goal_x] > 0):
+            found = False
+            # Expand search in rings around the centroid (skip if disabled)
+            if self.enable_centroid_search:
+                for r in range(1, search_radius + 1):
+                    # Top/bottom edges of the ring
+                    for dx in range(-r, r + 1):
+                        for dy in (-r, r):
+                            x = cx + dx
+                            y = cy + dy
+                            if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
+                                goal_x = x
+                                goal_y = y
+                                found = True
+                                break
+                        if found:
+                            break
+                    if found:
+                        break
+                
+                if not found:
+                    # Left/right edges of the ring
+                    for r in range(1, search_radius + 1):
+                        for dy in range(-r + 1, r):
+                            for dx in (-r, r):
+                                x = cx + dx
+                                y = cy + dy
+                                if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
+                                    goal_x = x
+                                    goal_y = y
+                                    found = True
+                                    break
+                            if found:
+                                break
+                        if found:
+                            break
+            
+            # Fallback: search for furthest floor point
+            if not found:
+                goal_x = cx
+                goal_y = h - 1
+                search_width_goal = 100
+                for y in range(0, h):
+                    for dx in range(-search_width_goal, search_width_goal + 1):
+                        x = cx + dx
+                        if 0 <= x < w and mask[y, x] > 0:
+                            goal_y = y
+                            goal_x = x
+                            break
+                    if goal_y < h - 1:
+                        break
+        
+        return goal_x, goal_y
+    
+    def _compute_navigation_path(self, mask, start_x, start_y, goal_x, goal_y):
+        """Compute navigation path from start to goal."""
+        if self.enable_pathfinding:
+            path_start_time = time.time()
+            path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y), None)
+            path_time = (time.time() - path_start_time) * 1000
+        else:
+            path = [(start_x, start_y), (goal_x, goal_y)]
+            path_time = 0.0
+        return path, path_time
+    
+    def _draw_navigation_visualization(self, overlay, mask, path, start_x, start_y, cx, cy, goal_x, goal_y, obstacle_time, path_time, total_time):
+        """Draw all navigation visualization elements."""
+        path_is_safe = self.validate_path(path, None)
+        
+        if path_is_safe and len(path) > 2:
+            # Create smooth path
+            if self.enable_smoothing:
+                smooth_path = self.create_smooth_path(path, mask)
+            else:
+                smooth_path = path
+            
+            # Draw path
+            if self.enable_drawing and len(smooth_path) > 1:
+                for i in range(len(smooth_path) - 1):
+                    cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 8)
+                    cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 30)
+            
+            # Draw markers
+            if self.enable_drawing:
+                cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)  # Goal - Red
+                cv2.circle(overlay, (cx, cy), 8, (255, 0, 255), -1)  # Centroid - Magenta
+                cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)  # Start - Yellow
+        else:
+            # Path blocked warning
+            warning_text = "PATH BLOCKED - No Safe Route"
+            cv2.putText(overlay, warning_text, (10, 70), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
+            cv2.putText(overlay, warning_text, (10, 70), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        # Display timing information
+        timing_text = f"Obstacle: {obstacle_time:.1f}ms | Path: {path_time:.1f}ms | Total: {total_time:.1f}ms"
+        cv2.putText(overlay, timing_text, (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(overlay, timing_text, (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+    
+    def _update_fps_stats(self):
+        """Update and log FPS statistics."""
+        if not self.show_fps:
+            return
+        
+        now = time.perf_counter()
+        if self.last_frame_time is not None:
+            dt = now - self.last_frame_time
+            if dt > 0:
+                fps = 1.0 / dt
+                if self.fps_ema == 0.0:
+                    self.fps_ema = fps
+                else:
+                    self.fps_ema = 0.9 * self.fps_ema + 0.1 * fps
+        self.last_frame_time = now
+        
+        self.frame_processed_count += 1
+        if self.frame_processed_count % 10 == 0 and self.fps_ema > 0.0:
+            self.get_logger().info(f'SegFormer FPS: {self.fps_ema:.1f}')
+    
+    def _log_profiling_info(self, t_preproc, t_model, t_postproc, t_upsample, t_mask_create, t_morph, t_cc, t_overlay_create, t_centroid, t_publish):
+        """Log profiling information."""
+        if not self.profile_timing:
+            return
+        
+        self._preproc_acc += t_preproc
+        self._model_acc += t_model
+        self._postproc_acc += t_postproc
+        self._profile_count += 1
+        
+        if self._profile_count % 20 == 0:
+            self.get_logger().info(
+                f'Profile (ms): pre={(self._preproc_acc/20)*1000:.1f} model={(self._model_acc/20)*1000:.1f} post={(self._postproc_acc/20)*1000:.1f}'
+            )
+            self.get_logger().info(
+                f'  Postproc breakdown: upsample={t_upsample:.1f} mask={t_mask_create:.1f} morph={t_morph:.1f} cc={t_cc:.1f} overlay={t_overlay_create:.1f} centroid={t_centroid:.1f} publish={t_publish:.1f}'
+            )
+            self._preproc_acc = 0.0
+            self._model_acc = 0.0
+            self._postproc_acc = 0.0
+
     def image_cb(self, msg: Image):
+        """Main callback for processing incoming camera images."""
         try:
+            # Frame skip for throughput
+            self.frame_counter += 1
+            if self.enable_frame_skip and self.frame_skip > 1 and (self.frame_counter % self.frame_skip) != 0:
+                return
+
+            # Convert ROS image to OpenCV format
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             h, w = frame.shape[:2]
-            inputs = self.processor(images=frame, return_tensors='pt')
-            pix = inputs['pixel_values'].to(self.device)
-            with torch.no_grad():
-                out = self.model(pixel_values=pix)
-            probs = torch.softmax(out.logits, dim=1)
-            probs_up = torch.nn.functional.interpolate(probs, size=(h, w), mode='bilinear', align_corners=False)[0].cpu().numpy()
+
+            # Step 1: Preprocess and run inference
+            pix, t_preproc = self._preprocess_frame(frame)
+            probs, t_model = self._run_inference(pix)
+            probs_up, t_upsample = self._upsample_and_transfer(probs, h, w)
 
             if self.floor_ids:
-                mask = np.zeros((h, w), dtype=np.uint8)
-                for fid in self.floor_ids:
-                    mask = np.logical_or(mask, probs_up[fid] > self.prob_threshold)
-                mask = mask.astype(np.uint8) * 255
-                # Morphological filtering
-                kernel = np.ones((self.morph_kernel, self.morph_kernel), np.uint8)
-                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-                # Area filter
-                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
-                for i in range(1, num_labels):
-                    if stats[i, cv2.CC_STAT_AREA] < self.min_area:
-                        mask[labels == i] = 0
-                # Publish mask
+                # Step 2: Create and refine floor mask
+                mask, t_mask_create = self._create_floor_mask(probs_up, h, w)
+                mask, t_morph = self._apply_morphology(mask)
+                mask, t_cc = self._filter_by_area(mask)
+                
+                # Step 3: Publish mask
                 mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
                 mask_msg.header = msg.header
                 self.mask_pub.publish(mask_msg)
-                # Overlay
-                overlay = frame.copy()
-                overlay[mask > 0] = (0, 255, 0)
                 
-                # Mark obstacles with inflation (optimized, within 1m)
-                import time
-                total_start = time.time()
-                obstacle_overlay, costmap, obstacle_time = self.mark_obstacles_with_inflation(mask)
+                # Step 4: Create overlay and detect obstacles
+                overlay, t_overlay_create = self._create_overlay_image(frame, mask)
+                obstacle_overlay, costmap, obstacle_time = self._detect_obstacles(mask, h, w)
                 
                 # Blend obstacle overlay with main overlay
-                obstacle_mask = np.any(obstacle_overlay > 0, axis=2)
-                overlay[obstacle_mask] = cv2.addWeighted(
-                    overlay[obstacle_mask], 0.3, 
-                    obstacle_overlay[obstacle_mask], 0.7, 0
-                )
+                if self.enable_obstacle_detection and self.enable_drawing:
+                    obstacle_mask = np.any(obstacle_overlay > 0, axis=2)
+                    overlay[obstacle_mask] = cv2.addWeighted(
+                        overlay[obstacle_mask], 0.3, 
+                        obstacle_overlay[obstacle_mask], 0.7, 0
+                    )
                 
-                # Centroid
+                # Step 5: Update FPS statistics
+                self._update_fps_stats()
+                
+                # Step 6: Compute navigation path and centroid
+                if self.profile_timing:
+                    t_centroid_start = time.perf_counter()
+                
+                total_start = time.time()
                 M = cv2.moments(mask)
                 if M['m00'] > 0:
                     cx = int(M['m10'] / M['m00'])
                     cy = int(M['m01'] / M['m00'])
                     
-                    # Draw path from bottom center to furthest floor point (top/far end)
+                    # Find start point (bottom center of floor)
                     start_x = w // 2
                     start_y = h - 1
-                    
-                    # Find the bottom-most floor pixel near the center (start point)
                     search_width = 50
                     for y in range(h - 1, -1, -1):
                         for dx in range(-search_width, search_width + 1):
@@ -467,124 +828,55 @@ class SegFormerNode(Node):
                         if start_y < h - 1:
                             break
                     
-                    # Use the centroid as the goal point (prefer centroid if it's on the floor).
-                    # If centroid pixel isn't on the floor, search nearby for the nearest floor pixel.
-                    goal_x = cx
-                    goal_y = cy
-                    search_radius = 100
-
-                    if not (0 <= goal_x < w and 0 <= goal_y < h and mask[goal_y, goal_x] > 0):
-                        found = False
-                        # Expand search in rings around the centroid
-                        for r in range(1, search_radius + 1):
-                            # Top/bottom edges of the ring
-                            for dx in range(-r, r + 1):
-                                for dy in ( -r, r ):
-                                    x = cx + dx
-                                    y = cy + dy
-                                    if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
-                                        goal_x = x
-                                        goal_y = y
-                                        found = True
-                                        break
-                                if found:
-                                    break
-                            if found:
-                                break
-
-                            # Left/right edges of the ring (excluding corners already checked)
-                            for dy in range(-r + 1, r):
-                                for dx in ( -r, r ):
-                                    x = cx + dx
-                                    y = cy + dy
-                                    if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
-                                        goal_x = x
-                                        goal_y = y
-                                        found = True
-                                        break
-                                if found:
-                                    break
-                            if found:
-                                break
-
-                        # Fallback: if no nearby floor found, revert to searching for a far/furthest floor point
-                        if not found:
-                            goal_x = cx
-                            goal_y = h - 1  # default to bottom if not found
-                            search_width_goal = 100
-                            for y in range(0, h):
-                                for dx in range(-search_width_goal, search_width_goal + 1):
-                                    x = cx + dx
-                                    if 0 <= x < w and mask[y, x] > 0:
-                                        goal_y = y
-                                        goal_x = x
-                                        break
-                                if goal_y < h - 1:
-                                    break
+                    # Find goal point
+                    goal_x, goal_y = self._find_navigation_goal(mask, cx, cy, h, w)
                     
-                    # Use A* pathfinding with costmap for obstacle avoidance
-                    path_start_time = time.time()
-                    # Temporarily disable costmap penalties — pass None so A* does not use costmap
-                    # (will re-enable costmap later)
-                    path = self.find_floor_path(mask, (start_x, start_y), (goal_x, goal_y), None)
-                    path_time = (time.time() - path_start_time) * 1000
-                    
-                    # Validate path - only display if safe (costmap disabled, so pass None)
-                    path_is_safe = self.validate_path(path, None)
-                    
-                    if path_is_safe and len(path) > 2:
-                        # Create smooth curvy path using spline interpolation
-                        smooth_path = self.create_smooth_path(path, mask)
-                        
-                        # Draw the curvy path on overlay (thicker for better visibility)
-                        if len(smooth_path) > 1:
-                            for i in range(len(smooth_path) - 1):
-                                # Draw a thicker blue path with a thin white outline for contrast
-                                cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0,0), 8)
-                                cv2.line(overlay, smooth_path[i], smooth_path[i + 1], (255, 0, 0), 30)
-                        
-                        # Draw goal point (furthest floor point) - Red
-                        cv2.circle(overlay, (goal_x, goal_y), 10, (0, 0, 255), -1)
-                        
-                        # Draw centroid as reference - Magenta
-                        cv2.circle(overlay, (cx, cy), 8, (255, 0, 255), -1)
-                        
-                        # Draw start point - Yellow
-                        cv2.circle(overlay, (start_x, start_y), 8, (255, 255, 0), -1)
-                    else:
-                        # Path blocked - display warning
-                        warning_text = "PATH BLOCKED - No Safe Route"
-                        cv2.putText(overlay, warning_text, (10, 70), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
-                        cv2.putText(overlay, warning_text, (10, 70), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    # Compute path
+                    path, path_time = self._compute_navigation_path(mask, start_x, start_y, goal_x, goal_y)
                     
                     # Calculate total processing time
                     total_time = (time.time() - total_start) * 1000
                     
-                    # Display timing information on overlay
-                    timing_text = f"Obstacle: {obstacle_time:.1f}ms | Path: {path_time:.1f}ms | Total: {total_time:.1f}ms"
-                    cv2.putText(overlay, timing_text, (10, 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                    cv2.putText(overlay, timing_text, (10, 30), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 1)
+                    # Draw visualization
+                    self._draw_navigation_visualization(overlay, mask, path, start_x, start_y, 
+                                                       cx, cy, goal_x, goal_y, 
+                                                       obstacle_time, path_time, total_time)
                     
+                    # Publish centroid
                     centroid = Point()
-                    centroid.x = float(cx+1.0)
-                    centroid.y = float(cy+1.0)
+                    centroid.x = float(cx + 1.0)
+                    centroid.y = float(cy + 1.0)
                     centroid.z = 0.0
                     self.centroid_pub.publish(centroid)
                     self.navigable_pub.publish(Bool(data=True))
                 else:
                     self.navigable_pub.publish(Bool(data=False))
                 
+                if self.profile_timing:
+                    t_centroid = (time.perf_counter() - t_centroid_start) * 1000
+                
+                # Step 7: Publish visualization
+                if self.profile_timing:
+                    t_publish_start = time.perf_counter()
                 overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
                 overlay_msg.header = msg.header
                 self.overlay_pub.publish(overlay_msg)
                 self.seg_image_pub.publish(overlay_msg)
-                # Confidence
+                
+                # Publish confidence
                 conf = float(np.max(probs_up[self.floor_ids])) if self.floor_ids else 0.0
                 self.conf_pub.publish(Float32(data=conf))
+                if self.profile_timing:
+                    t_publish = (time.perf_counter() - t_publish_start) * 1000
+                
+                # Step 8: Log profiling information
+                if self.profile_timing:
+                    t2 = time.perf_counter()
+                    # Calculate actual postproc time: sum of all postproc sub-stages
+                    t_postproc = (t_upsample + t_mask_create + t_morph + t_cc + t_overlay_create + t_centroid + t_publish) / 1000.0  # Convert back to seconds
+                    self._log_profiling_info(t_preproc, t_model, t_postproc, 
+                                           t_upsample, t_mask_create, t_morph, t_cc, 
+                                           t_overlay_create, t_centroid, t_publish)
         except Exception as e:
             self.get_logger().error(f'Image callback error: {e}')
 

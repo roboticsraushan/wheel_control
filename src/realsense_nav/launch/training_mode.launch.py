@@ -26,6 +26,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
+import os
 import yaml
 
 
@@ -180,11 +181,18 @@ def generate_launch_description():
     
     # Segformer semantic segmentation node (using ExecuteProcess)
     # Note: allow_download=True to download model from Hugging Face if not present locally
+    # Determine segmentation model path (prefer workspace src)
+    workspace_src_model = os.path.join(os.getcwd(), 'src', 'segmentation', 'models', 'segformer-b1-finetuned-ade-512-512')
+    if os.path.isdir(workspace_src_model):
+        seg_local_model = workspace_src_model
+    else:
+        seg_local_model = os.path.join(get_package_share_directory('segmentation'), 'models', 'segformer-b1-finetuned-ade-512-512')
+
     segformer_node = ExecuteProcess(
         cmd=['segformer_node_clean',
              '--ros-args',
              '--param', 'allow_download:=True',
-             '--param', 'local_model_dir:=models/segformer-b1-finetuned-ade-512-512',
+             '--param', f'local_model_dir:={seg_local_model}',
              '--param', 'prob_threshold:=0.5',
              '--param', 'min_area:=5000'],
         output='screen'
@@ -298,20 +306,20 @@ def generate_launch_description():
 
     return LaunchDescription([
         realsense_launch,
-        yolo_detector_node,
-        scene_graph_node,
-        scene_graph_mapper_process,
+        # yolo_detector_node,
+        # scene_graph_node,
+        # scene_graph_mapper_process,
         # junction_manager_node,
         # voice_command_node,
         # odometry_node,
-        vo_bridge_process,
-        # segformer_node,
+        # vo_bridge_process,
+        segformer_node,
         # floorplan_manager_process,
-        map_loader_process,
-        initial_pose_process,
-        # view_world_node,
+        # map_loader_process,
+        # initial_pose_process,
+        view_world_node,
         # semantic_visualizer_node,
-        static_tf_node,
+        # static_tf_node,
         # Ensure the RealSense IR emitter is disabled after the camera node has started.
         # This matches the parameter we pass into the camera launch above but is a
         # second attempt run after everything else has launched (helps on slower
