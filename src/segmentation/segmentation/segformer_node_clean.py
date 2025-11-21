@@ -665,10 +665,29 @@ class SegFormerNode(Node):
         if self.profile_timing:
             t_overlay_start = time.perf_counter()
         overlay = frame.copy()
-        # Draw walls in blue
-        overlay[wall_mask > 0] = (255, 0, 0)  # Blue (BGR format)
-        # Draw floor in green (overrides walls if overlap)
-        overlay[floor_mask > 0] = (0, 255, 0)  # Green (BGR format)
+        # Draw walls and floor with translucent blending rather than hard assignment
+        # This keeps the original image visible while providing colored cues.
+        alpha_floor = 0.4
+        alpha_wall = 0.4
+
+        # Draw walls first, then floor (floor overrides walls where they overlap)
+        wall_inds = wall_mask > 0
+        if np.any(wall_inds):
+            # Blend each wall pixel with the wall color
+            wall_color = np.array((255, 0, 0), dtype=np.float32)
+            overlay[wall_inds] = (
+                (1.0 - alpha_wall) * overlay[wall_inds].astype(np.float32) + 
+                alpha_wall * wall_color
+            ).astype(np.uint8)
+
+        floor_inds = floor_mask > 0
+        if np.any(floor_inds):
+            # Blend each floor pixel with the floor color (overrides walls visually)
+            floor_color = np.array((0, 255, 0), dtype=np.float32)
+            overlay[floor_inds] = (
+                (1.0 - alpha_floor) * overlay[floor_inds].astype(np.float32) + 
+                alpha_floor * floor_color
+            ).astype(np.uint8)
         if self.profile_timing:
             t_overlay_create = (time.perf_counter() - t_overlay_start) * 1000
             return overlay, t_overlay_create
@@ -1336,9 +1355,10 @@ class SegFormerNode(Node):
                 # Blend obstacle overlay with main overlay
                 if self.enable_obstacle_detection and self.enable_drawing:
                     obstacle_mask = np.any(obstacle_overlay > 0, axis=2)
+                    # Make obstacle overlay slightly translucent so the camera feed remains visible
                     overlay[obstacle_mask] = cv2.addWeighted(
-                        overlay[obstacle_mask], 0.3, 
-                        obstacle_overlay[obstacle_mask], 0.7, 0
+                        overlay[obstacle_mask], 0.6, 
+                        obstacle_overlay[obstacle_mask], 0.4, 0
                     )
                 
                 # Step 5: Update FPS statistics
